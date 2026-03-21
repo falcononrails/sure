@@ -1,0 +1,43 @@
+<%= turbo_frame_tag "modal" do %>
+  <%= render DS::Dialog.new do |dialog| %>
+    <% dialog.with_header(title: "Bridge") %>
+
+    <% dialog.with_body do %>
+      <% if @error_message.present? %>
+        <div class="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <%= @error_message %>
+        </div>
+      <% end %>
+
+      <div class="mb-5 space-y-2 text-sm text-secondary">
+        <p>Enter the Bridge <code>external_user_id</code> you already created for this Sure connection.</p>
+        <p>Example: <code>probablyunder</code></p>
+      </div>
+
+      <%= styled_form_with model: @bridge_item, url: @form_url, method: :post, class: "space-y-5", data: { turbo: true } do |form| %>
+        <%= form.text_field :bridge_external_user_id,
+                            autofocus: true,
+                            required: true,
+                            autocomplete: "off",
+                            spellcheck: false,
+                            label: "Bridge external_user_id",
+                            placeholder: "probablyunder",
+                            container_class: "bg-container",
+                            class: "font-mono" %>
+
+        <div class="flex items-center justify-end gap-3 pt-1">
+          <%= render DS::Button.new(
+                text: "Cancel",
+                variant: :outline,
+                type: :button,
+                data: { action: "DS--dialog#close" }
+              ) %>
+          <%= render DS::Button.new(
+                text: @submit_label || "Continue to Bridge",
+                type: :submit
+              ) %>
+        </div>
+      <% end %>
+    <% end %>
+  <% end %>
+<% end %>

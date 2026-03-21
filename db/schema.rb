@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2026_03_20_080659) do
+ActiveRecord::Schema[7.2].define(version: 2026_03_21_224500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -184,6 +184,57 @@ ActiveRecord::Schema[7.2].define(version: 2026_03_20_080659) do
     t.datetime "updated_at", null: false
     t.index ["family_id", "start_date", "end_date"], name: "index_budgets_on_family_id_and_start_date_and_end_date", unique: true
     t.index ["family_id"], name: "index_budgets_on_family_id"
+  end
+
+  create_table "bridge_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "bridge_item_id", null: false
+    t.string "name"
+    t.string "bridge_account_id"
+    t.string "currency"
+    t.decimal "current_balance", precision: 19, scale: 4
+    t.decimal "available_balance", precision: 19, scale: 4
+    t.string "account_status"
+    t.string "account_type"
+    t.string "account_subtype"
+    t.string "account_category"
+    t.string "data_access"
+    t.string "provider_id"
+    t.string "iban"
+    t.jsonb "institution_metadata"
+    t.jsonb "raw_payload"
+    t.jsonb "raw_transactions_payload"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["bridge_item_id", "bridge_account_id"], name: "index_bridge_accounts_on_item_and_bridge_account_id", unique: true, where: "(bridge_account_id IS NOT NULL)"
+    t.index ["bridge_item_id"], name: "index_bridge_accounts_on_bridge_item_id"
+  end
+
+  create_table "bridge_items", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "family_id", null: false
+    t.string "name"
+    t.string "bridge_external_user_id"
+    t.string "institution_id"
+    t.string "institution_name"
+    t.string "institution_domain"
+    t.string "institution_url"
+    t.string "institution_color"
+    t.string "status", default: "pending_connect"
+    t.boolean "scheduled_for_deletion", default: false
+    t.boolean "pending_account_setup", default: false
+    t.datetime "sync_start_date"
+    t.datetime "transactions_synced_at"
+    t.jsonb "raw_payload"
+    t.jsonb "raw_institution_payload"
+    t.string "bridge_item_id"
+    t.integer "bridge_status"
+    t.string "status_code_info"
+    t.text "status_code_description"
+    t.datetime "authentication_expires_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["bridge_item_id"], name: "index_bridge_items_on_bridge_item_id", unique: true, where: "(bridge_item_id IS NOT NULL)"
+    t.index ["family_id"], name: "index_bridge_items_on_family_id"
+    t.index ["status"], name: "index_bridge_items_on_status"
   end
 
   create_table "categories", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1507,6 +1558,8 @@ ActiveRecord::Schema[7.2].define(version: 2026_03_20_080659) do
   add_foreign_key "balances", "accounts", on_delete: :cascade
   add_foreign_key "budget_categories", "budgets"
   add_foreign_key "budget_categories", "categories"
+  add_foreign_key "bridge_accounts", "bridge_items"
+  add_foreign_key "bridge_items", "families"
   add_foreign_key "budgets", "families"
   add_foreign_key "categories", "families"
   add_foreign_key "chats", "users"

@@ -1,0 +1,12 @@
+one:
+  bridge_item: one
+  name: Primary Checking
+  bridge_account_id: acc_123
+  currency: USD
+  current_balance: 1250.50
+  available_balance: 1200.50
+  account_status: active
+  account_type: checking
+  data_access: enabled
+  raw_payload: {}
+  raw_transactions_payload: []

@@ -1,0 +1,124 @@
+<%# locals: (bridge_item:) %>
+
+<%= tag.div id: dom_id(bridge_item) do %>
+  <details open class="group bg-container p-4 shadow-border-xs rounded-xl">
+    <summary class="flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <%= icon "chevron-right", class: "group-open:transform group-open:rotate-90" %>
+
+        <div class="flex items-center justify-center h-8 w-8 bg-sky-600/10 rounded-full">
+          <% if bridge_item.logo.attached? %>
+            <%= image_tag bridge_item.logo, class: "rounded-full h-full w-full", loading: "lazy" %>
+          <% else %>
+            <div class="flex items-center justify-center">
+              <%= tag.p bridge_item.institution_display_name.first.upcase, class: "text-sky-600 text-xs font-medium" %>
+            </div>
+          <% end %>
+        </div>
+
+        <div class="pl-1 text-sm">
+          <div class="flex items-center gap-2">
+            <%= tag.p bridge_item.institution_display_name, class: "font-medium text-primary" %>
+            <% if bridge_item.scheduled_for_deletion? %>
+              <p class="text-destructive text-sm animate-pulse">Deletion in progress</p>
+            <% end %>
+          </div>
+          <p class="text-xs text-secondary">Bridge</p>
+          <% if bridge_item.syncing? %>
+            <div class="text-secondary flex items-center gap-1">
+              <%= icon "loader", size: "sm", class: "animate-spin" %>
+              <%= tag.span "Syncing..." %>
+            </div>
+          <% elsif bridge_item.requires_update? %>
+            <div class="text-warning flex items-center gap-1">
+              <%= icon "alert-triangle", size: "sm", color: "warning" %>
+              <%= tag.span(bridge_item.status_code_description.presence || "Reconnect required") %>
+            </div>
+          <% elsif bridge_item.sync_error.present? %>
+            <div class="text-secondary flex items-center gap-1">
+              <%= icon "alert-circle", size: "sm", color: "destructive" %>
+              <%= tag.span "Sync error", class: "text-destructive" %>
+            </div>
+          <% else %>
+            <p class="text-secondary">
+              <% if bridge_item.last_synced_at %>
+                Last synced <%= time_ago_in_words(bridge_item.last_synced_at) %> ago
+                <% if bridge_item.sync_status_summary %>
+                  · <%= bridge_item.sync_status_summary %>
+                <% end %>
+              <% else %>
+                Never synced
+              <% end %>
+            </p>
+          <% end %>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <% if bridge_item.requires_update? %>
+          <%= render DS::Link.new(
+            text: "Reconnect",
+            icon: "refresh-cw",
+            variant: "secondary",
+            href: edit_bridge_item_path(bridge_item),
+            frame: :modal
+          ) %>
+        <% else %>
+          <%= icon(
+            "refresh-cw",
+            as_button: true,
+            href: sync_bridge_item_path(bridge_item)
+          ) %>
+        <% end %>
+
+        <%= render DS::Menu.new do |menu| %>
+          <% menu.with_item(
+            variant: "button",
+            text: "Delete",
+            icon: "trash-2",
+            href: bridge_item_path(bridge_item),
+            method: :delete,
+            confirm: CustomConfirm.for_resource_deletion(bridge_item.institution_display_name, high_severity: true)
+          ) %>
+        <% end %>
+      </div>
+    </summary>
+
+    <% unless bridge_item.scheduled_for_deletion? %>
+      <div class="space-y-4 mt-4">
+        <% if bridge_item.accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: bridge_item.accounts %>
+        <% end %>
+
+        <% stats = if defined?(@bridge_sync_stats_map) && @bridge_sync_stats_map
+             @bridge_sync_stats_map[bridge_item.id] || {}
+           else
+             bridge_item.syncs.ordered.first&.sync_stats || {}
+           end %>
+        <%= render ProviderSyncSummary.new(
+          stats: stats,
+          provider_item: bridge_item
+        ) %>
+
+        <% if bridge_item.unlinked_accounts_count.positive? %>
+          <div class="p-4 flex flex-col gap-3 items-center justify-center">
+            <p class="text-primary font-medium text-sm">Setup needed</p>
+            <p class="text-secondary text-sm"><%= pluralize(bridge_item.unlinked_accounts_count, "account") %> imported from Bridge need setup.</p>
+            <%= render DS::Link.new(
+              text: "Set up accounts",
+              icon: "settings",
+              variant: "primary",
+              href: setup_accounts_bridge_item_path(bridge_item),
+              frame: :modal
+            ) %>
+          </div>
+        <% elsif bridge_item.accounts.empty? && bridge_item.total_accounts_count.zero? %>
+          <div class="p-4 flex flex-col gap-3 items-center justify-center">
+            <p class="text-primary font-medium text-sm">No accounts found</p>
+            <p class="text-secondary text-sm">Bridge has not returned any active accounts for this connection yet.</p>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </details>
+<% end %>

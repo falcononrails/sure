@@ -1,0 +1,11 @@
+<%= turbo_frame_tag "modal" do %>
+  <div class="p-8 text-center space-y-3"
+       data-controller="bridge-connect"
+       data-bridge-connect-url-value="<%= @connect_url %>">
+    <div class="flex justify-center">
+      <%= icon "loader-2", class: "animate-spin text-primary" %>
+    </div>
+    <p class="text-primary font-medium">Opening Bridge Connect...</p>
+    <p class="text-secondary text-sm">If nothing happens, <%= link_to "continue here", @connect_url, data: { turbo: false }, target: "_top", rel: "noopener noreferrer", class: "underline" %>.</p>
+  </div>
+<% end %>

@@ -9,6 +9,7 @@ class Family::Syncer
   # To add a new provider: add its association name here.
   # The model handles its own "ready to sync" logic via the syncable scope.
   SYNCABLE_ITEM_ASSOCIATIONS = %i[
+    bridge_items
     plaid_items
     simplefin_items
     lunchflow_items

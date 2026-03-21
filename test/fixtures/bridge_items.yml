@@ -1,0 +1,9 @@
+one:
+  family: dylan_family
+  name: Bridge Demo Bank
+  institution_name: Bridge Demo Bank
+  status: good
+  bridge_item_id: item_123
+  bridge_status: 0
+  raw_payload: {}
+  raw_institution_payload: {}

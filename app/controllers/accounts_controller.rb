@@ -6,6 +6,7 @@ class AccountsController < ApplicationController
     @manual_accounts = family.accounts
           .listable_manual
           .order(:name)
+    @bridge_items = family.bridge_items.where.not(status: :pending_connect).ordered.includes(:syncs, :bridge_accounts)
     @plaid_items = family.plaid_items.ordered.includes(:syncs, :plaid_accounts)
     @simplefin_items = family.simplefin_items.ordered.includes(:syncs)
     @lunchflow_items = family.lunchflow_items.ordered.includes(:syncs, :lunchflow_accounts)
@@ -238,6 +239,13 @@ class AccountsController < ApplicationController
         @simplefin_sync_stats_map[item.id] = {}
         @simplefin_show_relink_map[item.id] = false
         @simplefin_duplicate_only_map[item.id] = false
+      end
+
+      # Bridge sync stats
+      @bridge_sync_stats_map = {}
+      @bridge_items.each do |item|
+        latest_sync = item.syncs.ordered.first
+        @bridge_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
       end
 
       # Plaid sync stats

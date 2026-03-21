@@ -2,6 +2,21 @@ require "sidekiq/web"
 require "sidekiq/cron/web"
 
 Rails.application.routes.draw do
+  resources :bridge_items, only: %i[new create edit destroy] do
+    collection do
+      get :callback
+      get :select_existing_account
+      post :link_existing_account
+    end
+
+    member do
+      post :start_connect
+      post :sync
+      get :setup_accounts
+      post :complete_account_setup
+    end
+  end
+
   resources :indexa_capital_items, only: [ :index, :new, :create, :show, :edit, :update, :destroy ] do
     collection do
       get :preload_accounts

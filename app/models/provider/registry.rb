@@ -58,6 +58,15 @@ class Provider::Registry
         Provider::Plaid.new(config, region: :eu)
       end
 
+      def bridge
+        client_id = Provider::BridgeAdapter.config_value(:client_id).presence || ENV["BRIDGE_CLIENT_ID"]
+        client_secret = Provider::BridgeAdapter.config_value(:client_secret).presence || ENV["BRIDGE_CLIENT_SECRET"]
+
+        return nil unless client_id.present? && client_secret.present?
+
+        Provider::Bridge.new(client_id: client_id, client_secret: client_secret)
+      end
+
       def github
         Provider::Github.new
       end
