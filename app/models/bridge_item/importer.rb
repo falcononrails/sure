@@ -23,6 +23,7 @@ class BridgeItem::Importer
     end
 
     accounts = import_accounts!(access_token)
+    stocks = import_stocks!(access_token)
     transactions = import_transactions!(access_token)
 
     bridge_item.update!(
@@ -33,6 +34,7 @@ class BridgeItem::Importer
     {
       success: true,
       accounts_imported: accounts[:imported],
+      stocks_imported: stocks[:imported],
       transactions_imported: transactions[:imported]
     }
   rescue Provider::Bridge::BridgeError => e
@@ -102,6 +104,30 @@ class BridgeItem::Importer
         next unless bridge_account
 
         bridge_account.upsert_bridge_transactions_snapshot!(account_transactions)
+      end
+
+      { imported: imported }
+    end
+
+    def import_stocks!(access_token)
+      grouped_stocks = bridge_provider.list_stocks(access_token: access_token).each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |stock_snapshot, groups|
+        stock = stock_snapshot.with_indifferent_access
+        account_id = stock[:account_id].to_s
+        next if account_id.blank?
+
+        groups[account_id] << stock_snapshot
+      end
+
+      imported = 0
+
+      bridge_item.bridge_accounts.find_each do |bridge_account|
+        next if bridge_account.bridge_account_id.blank?
+
+        account_stocks = grouped_stocks[bridge_account.bridge_account_id.to_s]
+        bridge_account.upsert_bridge_stocks_snapshot!(account_stocks)
+        imported += account_stocks.count do |stock_snapshot|
+          !ActiveModel::Type::Boolean.new.cast(stock_snapshot.with_indifferent_access[:deleted])
+        end
       end
 
       { imported: imported }

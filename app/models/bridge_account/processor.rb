@@ -12,6 +12,7 @@ class BridgeAccount::Processor
     return { processed: false, skipped_entries: [] } if bridge_account.current_account.blank?
 
     process_account!
+    process_holdings!
     transaction_result = BridgeAccount::Transactions::Processor.new(bridge_account).process
 
     {
@@ -50,14 +51,24 @@ class BridgeAccount::Processor
         source: "bridge"
       )
 
-      if bridge_account.current_balance.present?
+      total_balance = bridge_account.effective_total_balance
+      cash_balance = bridge_account.effective_cash_balance
+
+      if total_balance.present?
         account.update!(
-          balance: bridge_account.current_balance,
-          cash_balance: bridge_account.current_balance,
+          balance: total_balance,
+          cash_balance: cash_balance || total_balance,
           currency: bridge_account.currency
         )
+        account.set_current_balance(total_balance)
       elsif bridge_account.currency.present?
         account.update!(currency: bridge_account.currency)
       end
+    end
+
+    def process_holdings!
+      return unless bridge_account.current_account&.investment?
+
+      BridgeAccount::Investments::HoldingsProcessor.new(bridge_account).process
     end
 end

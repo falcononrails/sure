@@ -4,6 +4,7 @@ class BridgeAccount < ApplicationRecord
   if encryption_ready?
     encrypts :raw_payload
     encrypts :raw_transactions_payload
+    encrypts :raw_stocks_payload
   end
 
   belongs_to :bridge_item
@@ -54,6 +55,54 @@ class BridgeAccount < ApplicationRecord
     end
 
     update!(raw_transactions_payload: merged.values)
+  end
+
+  def upsert_bridge_stocks_snapshot!(stocks_snapshot)
+    update!(raw_stocks_payload: Array(stocks_snapshot))
+  end
+
+  def active_stocks_snapshot
+    raw_stocks_payload.to_a.filter_map do |stock_snapshot|
+      stock = stock_snapshot.with_indifferent_access
+      next if ActiveModel::Type::Boolean.new.cast(stock[:deleted])
+
+      stock_snapshot
+    end
+  end
+
+  def current_holdings_value
+    active_stocks_snapshot.sum(0.to_d) do |stock_snapshot|
+      stock = stock_snapshot.with_indifferent_access
+      total_value = parse_balance(stock[:total_value])
+      next total_value if total_value.present?
+
+      quantity = parse_balance(stock[:quantity]) || 0
+      price = parse_balance(stock[:current_price]) || 0
+      quantity * price
+    end
+  end
+
+  def effective_total_balance
+    return current_balance unless investment_account?
+
+    holdings_value = current_holdings_value
+    return holdings_value if current_balance.blank?
+    return current_balance if holdings_value.zero?
+
+    [ current_balance, holdings_value ].max
+  end
+
+  def effective_cash_balance
+    return current_balance unless investment_account?
+
+    total_balance = effective_total_balance
+    return nil if total_balance.blank?
+
+    [ total_balance - current_holdings_value, 0.to_d ].max
+  end
+
+  def investment_account?
+    current_account&.investment?
   end
 
   private

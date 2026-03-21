@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2026_03_21_224500) do
+ActiveRecord::Schema[7.2].define(version: 2026_03_22_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -203,6 +203,7 @@ ActiveRecord::Schema[7.2].define(version: 2026_03_21_224500) do
     t.jsonb "institution_metadata"
     t.jsonb "raw_payload"
     t.jsonb "raw_transactions_payload"
+    t.jsonb "raw_stocks_payload"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["bridge_item_id", "bridge_account_id"], name: "index_bridge_accounts_on_item_and_bridge_account_id", unique: true, where: "(bridge_account_id IS NOT NULL)"

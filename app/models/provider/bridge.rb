@@ -80,6 +80,14 @@ class Provider::Bridge
     )
   end
 
+  def list_stocks(access_token:)
+    paginated_collection(
+      path: "/stocks",
+      access_token: access_token,
+      collection_keys: %i[stocks resources data results]
+    )
+  end
+
   def get_provider(provider_id:)
     response = self.class.get(
       "#{PROVIDERS_URL}/#{ERB::Util.url_encode(provider_id.to_s)}",
