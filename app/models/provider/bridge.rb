@@ -121,7 +121,7 @@ class Provider::Bridge
       next_query = query.presence
 
       loop do
-        url = next_uri.start_with?("http") ? next_uri : "#{BASE_URL}#{next_uri}"
+        url = build_pagination_url(next_uri)
         response = self.class.get(url, headers: authenticated_headers(access_token), query: next_query)
         parsed = handle_response(response)
 
@@ -139,6 +139,13 @@ class Provider::Bridge
       end
 
       items
+    end
+
+    def build_pagination_url(next_uri)
+      return next_uri if next_uri.start_with?("http")
+      return "https://api.bridgeapi.io#{next_uri}" if next_uri.start_with?("/v3/")
+
+      "#{BASE_URL}#{next_uri}"
     end
 
     def app_headers
