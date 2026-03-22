@@ -82,24 +82,66 @@ class BridgeAccount::Investments::HoldingsProcessor
     end
 
     def resolve_security!(stock_snapshot)
-      ticker = stock_snapshot[:isin].to_s.strip.upcase
+      isin = stock_snapshot[:isin].to_s.strip.upcase
       label = stock_snapshot[:label].to_s.strip
 
-      if ticker.blank?
-        ticker = "BRIDGE:#{(stock_snapshot[:stock_key] || stock_snapshot[:id]).to_s.strip.upcase}"
+      if (provider_security = resolve_provider_security(isin: isin, label: label))
+        return persist_security(
+          ticker: provider_security.ticker,
+          exchange_operating_mic: provider_security.exchange_operating_mic,
+          country_code: provider_security.country_code,
+          name: provider_security.name.presence || label,
+          offline: false
+        )
       end
 
-      security = Security.find_or_initialize_by(ticker: ticker)
-      security.name = label if label.present? && (security.name.blank? || security.name == security.ticker)
+      ticker = isin.presence || "BRIDGE:#{(stock_snapshot[:stock_key] || stock_snapshot[:id]).to_s.strip.upcase}"
+      offline = ticker.start_with?("BRIDGE:")
 
-      if ticker.start_with?("BRIDGE:")
-        security.offline = true if security.respond_to?(:offline)
-      end
+      persist_security(
+        ticker: ticker,
+        name: label,
+        offline: offline
+      )
+    end
+
+    def resolve_provider_security(isin:, label:)
+      candidates = []
+      candidates = Security.search_provider(isin) if isin.present?
+      candidates = Security.search_provider(label) if candidates.empty? && label.present?
+      return nil if candidates.empty?
+
+      candidates.find { |candidate| preferred_candidate?(candidate, isin: isin, label: label) } || candidates.first
+    rescue => e
+      Rails.logger.warn("BridgeAccount::Investments::HoldingsProcessor - Failed to resolve provider security for #{isin.presence || label}: #{e.class} - #{e.message}")
+      nil
+    end
+
+    def preferred_candidate?(candidate, isin:, label:)
+      candidate_ticker = candidate.ticker.to_s.upcase
+      candidate_name = candidate.name.to_s.downcase
+      label_text = label.to_s.downcase
+
+      return true if isin.present? && candidate_ticker != isin
+      return true if label_text.present? && candidate_name.include?(label_text.first(24))
+
+      false
+    end
+
+    def persist_security(ticker:, name:, exchange_operating_mic: nil, country_code: nil, offline: false)
+      security = Security.find_or_initialize_by(
+        ticker: ticker,
+        exchange_operating_mic: exchange_operating_mic
+      )
+
+      security.name = name if name.present? && (security.name.blank? || security.name == security.ticker)
+      security.country_code = country_code if country_code.present?
+      security.offline = offline if security.respond_to?(:offline)
 
       security.save! if security.new_record? || security.changed?
       security
     rescue ActiveRecord::RecordNotUnique
-      Security.find_by!(ticker: ticker)
+      Security.find_by!(ticker: ticker, exchange_operating_mic: exchange_operating_mic)
     end
 
     def external_id_for(stock_snapshot)
