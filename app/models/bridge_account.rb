@@ -58,11 +58,11 @@ class BridgeAccount < ApplicationRecord
   end
 
   def upsert_bridge_stocks_snapshot!(stocks_snapshot)
-    update!(raw_stocks_payload: Array(stocks_snapshot))
+    update!(raw_stocks_payload: normalize_stocks_snapshot(stocks_snapshot))
   end
 
   def active_stocks_snapshot
-    raw_stocks_payload.to_a.filter_map do |stock_snapshot|
+    normalize_stocks_snapshot(raw_stocks_payload).filter_map do |stock_snapshot|
       stock = stock_snapshot.with_indifferent_access
       next if ActiveModel::Type::Boolean.new.cast(stock[:deleted])
 
@@ -119,6 +119,35 @@ class BridgeAccount < ApplicationRecord
       BigDecimal(value.to_s)
     rescue ArgumentError
       nil
+    end
+
+    def normalize_stocks_snapshot(stocks_snapshot)
+      Array(stocks_snapshot).each_with_object({}) do |stock_snapshot, grouped|
+        stock = stock_snapshot.with_indifferent_access
+        dedupe_key = stock[:isin].presence || stock[:stock_key].presence || stock[:id].to_s
+        next if dedupe_key.blank?
+
+        existing = grouped[dedupe_key]
+        grouped[dedupe_key] = preferred_stock_snapshot(existing, stock_snapshot)
+      end.values
+    end
+
+    def preferred_stock_snapshot(existing_snapshot, candidate_snapshot)
+      return candidate_snapshot if existing_snapshot.blank?
+
+      existing = existing_snapshot.with_indifferent_access
+      candidate = candidate_snapshot.with_indifferent_access
+
+      existing_deleted = ActiveModel::Type::Boolean.new.cast(existing[:deleted])
+      candidate_deleted = ActiveModel::Type::Boolean.new.cast(candidate[:deleted])
+
+      return candidate_snapshot if existing_deleted && !candidate_deleted
+      return existing_snapshot if candidate_deleted && !existing_deleted
+
+      existing_id = existing[:id].to_i
+      candidate_id = candidate[:id].to_i
+
+      candidate_id >= existing_id ? candidate_snapshot : existing_snapshot
     end
 
     def log_invalid_currency(currency_value)
