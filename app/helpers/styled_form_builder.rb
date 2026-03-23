@@ -1,6 +1,24 @@
 class StyledFormBuilder < ActionView::Helpers::FormBuilder
   class_attribute :text_field_helpers, default: field_helpers - [ :label, :check_box, :radio_button, :fields_for, :fields, :hidden_field, :file_field ]
 
+  def merge_classes(base_class, extra_class)
+      # Rails lets callers pass `class:` as a string or array (e.g. from conditionals).
+      # We must *append* to the base class, not override it.
+      extra =
+        case extra_class
+        when nil
+          nil
+        when Array
+          extra_class
+        else
+          [extra_class.to_s]
+        end
+
+      classes = [base_class, extra].compact
+      classes.flatten.join(" ")
+  end
+  private :merge_classes
+
   text_field_helpers.each do |selector|
     class_eval <<-RUBY_EVAL, __FILE__, __LINE__ + 1
       def #{selector}(method, options = {})
@@ -15,8 +33,9 @@ class StyledFormBuilder < ActionView::Helpers::FormBuilder
   end
 
   def radio_button(method, tag_value, options = {})
-    merged_options = { class: "form-field__radio" }.merge(options)
-    super(method, tag_value, merged_options)
+    extra_class = options[:class]
+    options = options.merge(class: merge_classes("form-field__radio", extra_class))
+    super(method, tag_value, options)
   end
 
   def select(method, choices, options = {}, html_options = {})
@@ -90,13 +109,18 @@ class StyledFormBuilder < ActionView::Helpers::FormBuilder
   end
 
   private
-    def build_field(method, options = {}, html_options = {}, &block)
+
+  def build_field(method, options = {}, html_options = {}, &block)
       if options[:inline] || options[:label] == false
-        return yield({ class: "form-field__input" }.merge(html_options))
+        extra_class = html_options[:class]
+        html_options = html_options.merge(class: merge_classes("form-field__input", extra_class))
+        return yield(html_options)
       end
 
       label_element = build_label(method, options)
-      field_element = yield({ class: "form-field__input" }.merge(html_options))
+      extra_class = html_options[:class]
+      html_options = html_options.merge(class: merge_classes("form-field__input", extra_class))
+      field_element = yield(html_options)
 
       container_classes = [ "form-field", options[:container_class] ].compact
 

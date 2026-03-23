@@ -13,7 +13,9 @@
         <div class="space-y-3">
           <div>
             <%= f.label :setup_token, t(".setup_token"), class: "text-sm text-secondary block mb-1" %>
-            <%= f.text_field :setup_token, class: "input", placeholder: t(".setup_token_placeholder") %>
+            <div class="form-field">
+              <%= f.text_field :setup_token, class: "form-field__input", placeholder: t(".setup_token_placeholder") %>
+            </div>
           </div>
           <div class="flex items-center gap-2 justify-end pt-2">
             <%= link_to t(".cancel"), accounts_path, class: "btn", data: { turbo_frame: "_top", action: "DS--dialog#close" } %>
