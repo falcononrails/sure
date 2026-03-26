@@ -1,11 +1,17 @@
 class Account < ApplicationRecord
   include AASM, Syncable, Monetizable, Chartable, Linkable, Enrichable, Anchorable, Reconcileable, TaxTreatable
 
+  before_validation :assign_default_owner, if: -> { owner_id.blank? }
+
   validates :name, :balance, :currency, presence: true
+  validate :owner_belongs_to_family, if: -> { owner_id.present? && family_id.present? }
 
   belongs_to :family
+  belongs_to :owner, class_name: "User", optional: true
   belongs_to :import, optional: true
 
+  has_many :account_shares, dependent: :destroy
+  has_many :shared_users, through: :account_shares, source: :user
   has_many :import_mappings, as: :mappable, dependent: :destroy, class_name: "Import::Mapping"
   has_many :entries, dependent: :destroy
   has_many :transactions, through: :entries, source: :entryable, source_type: "Transaction"
@@ -34,6 +40,31 @@ class Account < ApplicationRecord
 
   scope :listable_manual, -> {
     manual.where.not(status: :pending_deletion)
+  }
+
+  # All accounts a user can access (owned + shared with them)
+  scope :accessible_by, ->(user) {
+    left_joins(:account_shares)
+      .where("accounts.owner_id = :uid OR account_shares.user_id = :uid", uid: user.id)
+      .distinct
+  }
+
+  # Accounts a user can write to (owned or shared with full_control)
+  scope :writable_by, ->(user) {
+    left_joins(:account_shares)
+      .where("accounts.owner_id = :uid OR (account_shares.user_id = :uid AND account_shares.permission = 'full_control')", uid: user.id)
+      .distinct
+  }
+
+  # Accounts that count in a user's financial calculations
+  scope :included_in_finances_for, ->(user) {
+    left_joins(:account_shares)
+      .where(
+        "accounts.owner_id = :uid OR " \
+        "(account_shares.user_id = :uid AND account_shares.include_in_finances = true)",
+        uid: user.id
+      )
+      .distinct
   }
 
   has_one_attached :logo, dependent: :purge_later
@@ -96,6 +127,8 @@ class Account < ApplicationRecord
           date: opening_balance_date
         )
         raise result.error if result.error
+
+        account.auto_share_with_family! if account.family.share_all_by_default?
       end
 
       # Skip initial sync for linked accounts - the provider sync will handle balance creation
@@ -138,8 +171,9 @@ class Account < ApplicationRecord
         end
       end
 
+      family = simplefin_account.simplefin_item.family
       attributes = {
-        family: simplefin_account.simplefin_item.family,
+        family: family,
         name: simplefin_account.name,
         balance: balance,
         cash_balance: cash_balance,
@@ -165,8 +199,9 @@ class Account < ApplicationRecord
 
       cash_balance = balance
 
+      family = enable_banking_account.enable_banking_item.family
       attributes = {
-        family: enable_banking_account.enable_banking_item.family,
+        family: family,
         name: enable_banking_account.name,
         balance: balance,
         cash_balance: cash_balance,
@@ -271,14 +306,22 @@ class Account < ApplicationRecord
   end
 
   def current_holdings
-    holdings
-      .where(currency: currency)
-      .where.not(qty: 0)
-      .where(
-        id: holdings.select("DISTINCT ON (security_id) id")
-                    .where(currency: currency)
-                    .order(:security_id, date: :desc)
-      )
+    holdings_scope = holdings.where.not(qty: 0)
+
+    latest_ids =
+      if investment?
+        holdings_scope
+          .select("DISTINCT ON (security_id, currency) id")
+          .order(:security_id, :currency, date: :desc)
+      else
+        holdings_scope
+          .where(currency: currency)
+          .select("DISTINCT ON (security_id) id")
+          .order(:security_id, date: :desc)
+      end
+
+    holdings_scope
+      .where(id: latest_ids)
       .order(amount: :desc)
   end
 
@@ -344,4 +387,62 @@ class Account < ApplicationRecord
       raise "Unknown account type: #{accountable_type}"
     end
   end
+
+  def owned_by?(user)
+    user.present? && owner_id == user.id
+  end
+
+  def shared_with?(user)
+    return false if user.nil?
+
+    owned_by?(user) ||
+      if account_shares.loaded?
+        account_shares.any? { |s| s.user_id == user.id }
+      else
+        account_shares.exists?(user: user)
+      end
+  end
+
+  def shared?
+    account_shares.any?
+  end
+
+  def permission_for(user)
+    return :owner if owned_by?(user)
+    account_shares.find_by(user: user)&.permission&.to_sym
+  end
+
+  def share_with!(user, permission: "read_only", include_in_finances: true)
+    account_shares.create!(user: user, permission: permission, include_in_finances: include_in_finances)
+  end
+
+  def unshare_with!(user)
+    account_shares.where(user: user).destroy_all
+  end
+
+  def auto_share_with_family!
+    records = family.users.where.not(id: owner_id).pluck(:id).map do |user_id|
+      { account_id: id, user_id: user_id, permission: "read_write",
+        include_in_finances: true, created_at: Time.current, updated_at: Time.current }
+    end
+
+    AccountShare.insert_all(records, unique_by: %i[account_id user_id]) if records.any?
+  end
+
+  private
+
+    def assign_default_owner
+      return if owner.present?
+
+      if Current.user.present? && Current.user.family_id == family_id
+        self.owner = Current.user
+      else
+        self.owner = family&.users&.find_by(role: %w[admin super_admin]) || family&.users&.order(:created_at)&.first
+      end
+    end
+
+    def owner_belongs_to_family
+      return if User.where(id: owner_id, family_id: family_id).exists?
+      errors.add(:owner, :invalid, message: "must belong to the same family as the account")
+    end
 end

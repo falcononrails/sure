@@ -16,6 +16,7 @@ class Provider::Snaptrade
   MAX_RETRIES = 3
   INITIAL_RETRY_DELAY = 2 # seconds
   MAX_RETRY_DELAY = 30 # seconds
+  ACTIVITIES_PAGE_SIZE = 1000
 
   attr_reader :client
 
@@ -189,11 +190,13 @@ class Provider::Snaptrade
   # Get activity/transaction history for a specific account
   # Supports pagination via start_date and end_date
   def get_account_activities(user_id:, user_secret:, account_id:, start_date: nil, end_date: nil)
-    with_retries("get_account_activities") do
+    paginate_activities("get_account_activities") do |offset, limit|
       params = {
         user_id: user_id,
         user_secret: user_secret,
-        account_id: account_id
+        account_id: account_id,
+        offset: offset,
+        limit: limit
       }
       params[:start_date] = start_date.to_date.to_s if start_date
       params[:end_date] = end_date.to_date.to_s if end_date
@@ -206,10 +209,12 @@ class Provider::Snaptrade
 
   # Get activities across all accounts (alternative endpoint)
   def get_activities(user_id:, user_secret:, start_date: nil, end_date: nil, accounts: nil, brokerage_authorizations: nil, type: nil)
-    with_retries("get_activities") do
+    paginate_activities("get_activities") do |offset, limit|
       params = {
         user_id: user_id,
-        user_secret: user_secret
+        user_secret: user_secret,
+        offset: offset,
+        limit: limit
       }
       params[:start_date] = start_date.to_date.to_s if start_date
       params[:end_date] = end_date.to_date.to_s if end_date
@@ -240,6 +245,33 @@ class Provider::Snaptrade
         raise ApiError.new("SnapTrade server error (#{status}). Please try again later.", status_code: status, response_body: body)
       else
         raise ApiError.new("SnapTrade API error: #{error.message}", status_code: status, response_body: body)
+      end
+    end
+
+    def paginate_activities(operation_name)
+      offset = 0
+      results = []
+
+      loop do
+        response = with_retries(operation_name) { yield(offset, ACTIVITIES_PAGE_SIZE) }
+        page = extract_activities_page(response)
+
+        results.concat(page)
+        break if page.size < ACTIVITIES_PAGE_SIZE
+
+        offset += ACTIVITIES_PAGE_SIZE
+      end
+
+      results
+    end
+
+    def extract_activities_page(response)
+      if response.respond_to?(:data)
+        response.data || []
+      elsif response.is_a?(Array)
+        response
+      else
+        []
       end
     end
 

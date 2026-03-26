@@ -792,7 +792,7 @@ DEPENDENCIES
   brakeman
   capybara
   climate_control
-  connection_pool (< 3)
+  connection_pool (~> 2.5)
   countries
   csv
   debug

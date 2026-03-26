@@ -71,8 +71,15 @@ class SnaptradeAccount::Processor
     end
 
     def calculate_total_balance
-      # Calculate total from holdings + cash for accuracy
-      # SnapTrade's current_balance can sometimes be stale or just the cash value
+      # Prefer the provider total when holdings are denominated in a different
+      # currency than the account base currency. Summing raw USD holdings and
+      # EUR cash produces misleading account totals.
+      if mixed_currency_holdings? && snaptrade_account.current_balance.present?
+        Rails.logger.info "SnaptradeAccount::Processor - Using API total for mixed-currency account: #{snaptrade_account.current_balance}"
+        return snaptrade_account.current_balance
+      end
+
+      # Calculate total from holdings + cash when all values are in the same currency.
       holdings_value = calculate_holdings_value
       cash_value = snaptrade_account.cash_balance || 0
 
@@ -108,5 +115,23 @@ class SnaptradeAccount::Processor
         price = parse_decimal(data[:price]) || 0
         units * price
       end
+    end
+
+    def mixed_currency_holdings?
+      base_currency = snaptrade_account.currency.presence || snaptrade_account.current_account&.currency
+      return false if base_currency.blank?
+
+      holding_currencies = Array(snaptrade_account.raw_holdings_payload).filter_map do |holding|
+        data = holding.is_a?(Hash) ? holding.with_indifferent_access : {}
+        currency_data = data[:currency]
+
+        if currency_data.is_a?(Hash)
+          currency_data.with_indifferent_access[:code]
+        elsif currency_data.is_a?(String)
+          currency_data
+        end
+      end.uniq
+
+      holding_currencies.any? { |currency| currency.present? && currency != base_currency }
     end
 end

@@ -232,7 +232,7 @@ class SnaptradeItem::Importer
             "dispatching background fetch job (SnapTrade may still be syncing)"
           )
 
-          SnaptradeActivitiesFetchJob.set(wait: 10.seconds).perform_later(
+          SnaptradeActivitiesFetchJob.set(wait: 30.seconds).perform_later(
             snaptrade_account,
             start_date: start_date
           )

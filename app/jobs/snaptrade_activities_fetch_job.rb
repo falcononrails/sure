@@ -18,8 +18,21 @@ class SnaptradeActivitiesFetchJob < ApplicationJob
                   on_conflict: :log
 
   # Configuration for retry behavior
-  RETRY_DELAY = 10.seconds
-  MAX_RETRIES = 6
+  RETRY_DELAYS = [
+    30.seconds,
+    1.minute,
+    2.minutes,
+    5.minutes,
+    10.minutes,
+    15.minutes,
+    30.minutes,
+    30.minutes,
+    30.minutes,
+    30.minutes,
+    30.minutes,
+    30.minutes
+  ].freeze
+  MAX_RETRIES = RETRY_DELAYS.size
 
   def perform(snaptrade_account, start_date:, end_date: nil, retry_count: 0)
     end_date ||= Date.current
@@ -58,12 +71,13 @@ class SnaptradeActivitiesFetchJob < ApplicationJob
       process_activities(snaptrade_account)
     elsif retry_count < MAX_RETRIES
       # No activities yet, reschedule with delay
+      retry_delay = retry_delay_for(retry_count)
       Rails.logger.info(
         "SnaptradeActivitiesFetchJob - No activities yet for account #{snaptrade_account.id}, " \
-        "rescheduling (#{retry_count + 1}/#{MAX_RETRIES})"
+        "rescheduling in #{retry_delay.inspect} (#{retry_count + 1}/#{MAX_RETRIES})"
       )
 
-      self.class.set(wait: RETRY_DELAY).perform_later(
+      self.class.set(wait: retry_delay).perform_later(
         snaptrade_account,
         start_date: start_date,
         end_date: end_date,
@@ -96,7 +110,7 @@ class SnaptradeActivitiesFetchJob < ApplicationJob
   private
 
     def fetch_activities(snaptrade_account, provider, credentials, start_date, end_date)
-      response = provider.get_account_activities(
+      activities = provider.get_account_activities(
         user_id: credentials[:user_id],
         user_secret: credentials[:user_secret],
         account_id: snaptrade_account.snaptrade_account_id,
@@ -104,17 +118,12 @@ class SnaptradeActivitiesFetchJob < ApplicationJob
         end_date: end_date
       )
 
-      # Handle paginated response
-      activities = if response.respond_to?(:data)
-        response.data || []
-      elsif response.is_a?(Array)
-        response
-      else
-        []
-      end
-
       # Convert SDK objects to hashes
       activities.map { |a| sdk_object_to_hash(a) }
+    end
+
+    def retry_delay_for(retry_count)
+      RETRY_DELAYS.fetch(retry_count, RETRY_DELAYS.last)
     end
 
     # Merge activities, deduplicating by ID
