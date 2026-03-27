@@ -33,21 +33,6 @@ module Account::Chartable
 
   private
     def normalize_linked_investment_series(series)
-      return series unless linked? && investment?
-      return series if trades.exists?
-
-      first_provider_holding_date = holdings.where.not(account_provider_id: nil).minimum(:date)
-      return series unless first_provider_holding_date.present?
-
-      trimmed_values = series.values.select { |value| value.date >= first_provider_holding_date }
-      return series if trimmed_values.blank? || trimmed_values.length == series.values.length
-
-      Series.new(
-        start_date: trimmed_values.first.date,
-        end_date: series.end_date,
-        interval: series.interval,
-        values: trimmed_values,
-        favorable_direction: series.favorable_direction
-      )
+      Balance::LinkedInvestmentSeriesNormalizer.new(account: self, series: series).normalize
     end
 end
