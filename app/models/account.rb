@@ -309,6 +309,13 @@ class Account < ApplicationRecord
   def current_holdings
     holdings_scope = holdings.where.not(qty: 0)
 
+    if investment? && latest_provider_holdings_snapshot_date.present?
+      return holdings_scope
+        .where.not(account_provider_id: nil)
+        .where(date: latest_provider_holdings_snapshot_date)
+        .order(amount: :desc)
+    end
+
     latest_ids =
       if investment?
         holdings_scope
@@ -324,6 +331,10 @@ class Account < ApplicationRecord
     holdings_scope
       .where(id: latest_ids)
       .order(amount: :desc)
+  end
+
+  def latest_provider_holdings_snapshot_date
+    holdings.where.not(account_provider_id: nil).maximum(:date)
   end
 
   def start_date
