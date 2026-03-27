@@ -65,7 +65,8 @@ class AccountableSparklinesController < ApplicationController
       Balance::SeriesAggregator.new(
         series_list: series_list,
         currency: family.currency,
-        favorable_direction: @accountable.favorable_direction
+        favorable_direction: @accountable.favorable_direction,
+        align_to_common_start: true
       ).aggregate
     end
 

@@ -232,7 +232,12 @@ class CoinstatsAccount < ApplicationRecord
     coin_payload = coin_payload.to_h.with_indifferent_access
 
     explicit_value = coin_payload[:currentValue] || coin_payload[:current_value] || coin_payload[:totalWorth]
-    return extract_currency_amount(explicit_value, currency) if explicit_value.present?
+    if explicit_value.present?
+      return extract_currency_amount(explicit_value, currency) if explicit_value.is_a?(Hash)
+      return exchange_scalar_value(explicit_value, coin_payload, currency: currency) if exchange_value_payload?(coin_payload)
+
+      return parse_decimal(explicit_value)
+    end
 
     asset_quantity(coin_payload).abs * asset_price(coin_payload, currency: currency)
   end
@@ -303,6 +308,23 @@ class CoinstatsAccount < ApplicationRecord
         values[target_currency.to_s] ||
         converted_usd_amount(values[:USD] || values["USD"], target_currency)
       )
+    end
+
+    def exchange_value_payload?(payload)
+      exchange_source_for?(payload) || exchange_portfolio_source_for?(payload)
+    end
+
+    def exchange_scalar_value(explicit_value, coin_payload, currency:)
+      target_currency = parse_currency(currency) || currency || "USD"
+      return parse_decimal(explicit_value) if target_currency == "USD"
+
+      price_based_value = asset_quantity(coin_payload).abs * asset_price(coin_payload, currency: target_currency)
+      return price_based_value if price_based_value.positive?
+
+      converted_value = converted_usd_amount(explicit_value, target_currency)
+      return parse_decimal(converted_value) if converted_value.present?
+
+      parse_decimal(explicit_value)
     end
 
     def fiat_identifier?(value)
