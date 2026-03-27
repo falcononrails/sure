@@ -87,6 +87,7 @@ class CoinstatsAccount::Transactions::Processor
     # @return [Array<Hash>] Transactions matching this account's token
     def filter_transactions_for_account(transactions)
       return [] unless transactions.present?
+      return transactions if coinstats_account.exchange_portfolio_account?
       return transactions unless coinstats_account.account_id.present?
 
       account_id = coinstats_account.account_id.to_s.downcase

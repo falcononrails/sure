@@ -1,5 +1,5 @@
-# Represents a single crypto token/coin within a CoinStats wallet.
-# Each wallet address may have multiple CoinstatsAccounts (one per token).
+# Represents a CoinStats-backed synced account.
+# This may be a wallet-scoped asset row or a consolidated exchange portfolio.
 class CoinstatsAccount < ApplicationRecord
   include CurrencyNormalizable, Encryptable
 
@@ -78,8 +78,22 @@ class CoinstatsAccount < ApplicationRecord
     exchange_source_for?(raw_payload)
   end
 
+  def exchange_portfolio_account?
+    payload = raw_payload.to_h.with_indifferent_access
+    exchange_source_for?(payload) && (
+      ActiveModel::Type::Boolean.new.cast(payload[:portfolio_account]) ||
+      payload[:coins].is_a?(Array)
+    )
+  end
+
+  def legacy_exchange_asset_account?
+    exchange_source? && !exchange_portfolio_account?
+  end
+
   def fiat_asset?(payload = raw_payload)
     payload = payload.to_h.with_indifferent_access
+    return false if exchange_portfolio_source_for?(payload)
+
     metadata = asset_metadata(payload)
 
     ActiveModel::Type::Boolean.new.cast(metadata[:isFiat]) ||
@@ -96,7 +110,9 @@ class CoinstatsAccount < ApplicationRecord
   def inferred_currency(payload = raw_payload)
     payload = payload.to_h.with_indifferent_access
 
-    if exchange_source_for?(payload)
+    if exchange_portfolio_source_for?(payload)
+      preferred_exchange_currency
+    elsif exchange_source_for?(payload)
       if fiat_asset?(payload)
         parse_currency(asset_metadata(payload)[:symbol]) ||
           parse_currency(payload[:currency]) ||
@@ -115,7 +131,9 @@ class CoinstatsAccount < ApplicationRecord
   def inferred_current_balance(payload = raw_payload)
     payload = payload.to_h.with_indifferent_access
 
-    if fiat_asset?(payload)
+    if exchange_portfolio_source_for?(payload)
+      portfolio_total_value(payload)
+    elsif fiat_asset?(payload)
       asset_quantity(payload).abs
     elsif exchange_source_for?(payload)
       asset_quantity(payload).abs * asset_price(payload)
@@ -128,6 +146,8 @@ class CoinstatsAccount < ApplicationRecord
   end
 
   def inferred_cash_balance
+    return portfolio_cash_value if exchange_portfolio_account?
+
     fiat_asset? ? inferred_current_balance : 0.to_d
   end
 
@@ -187,10 +207,48 @@ class CoinstatsAccount < ApplicationRecord
     parse_decimal(raw_cost_basis)
   end
 
+  def portfolio_coins(payload = raw_payload)
+    payload = payload.to_h.with_indifferent_access
+    Array(payload[:coins]).map { |coin| coin.with_indifferent_access }
+  end
+
+  def portfolio_fiat_coins(payload = raw_payload)
+    portfolio_coins(payload).select { |coin| fiat_asset?(coin) }
+  end
+
+  def portfolio_non_fiat_coins(payload = raw_payload)
+    portfolio_coins(payload).reject { |coin| fiat_asset?(coin) }
+  end
+
+  def portfolio_total_value(payload = raw_payload, currency: inferred_currency(payload))
+    portfolio_coins(payload).sum { |coin| current_value_for_coin(coin, currency: currency) }
+  end
+
+  def portfolio_cash_value(payload = raw_payload, currency: inferred_currency(payload))
+    portfolio_fiat_coins(payload).sum { |coin| current_value_for_coin(coin, currency: currency) }
+  end
+
+  def current_value_for_coin(coin_payload, currency: inferred_currency(coin_payload))
+    coin_payload = coin_payload.to_h.with_indifferent_access
+
+    explicit_value = coin_payload[:currentValue] || coin_payload[:current_value] || coin_payload[:totalWorth]
+    return extract_currency_amount(explicit_value, currency) if explicit_value.present?
+
+    asset_quantity(coin_payload).abs * asset_price(coin_payload, currency: currency)
+  end
+
   private
     def exchange_source_for?(payload)
       payload = payload.to_h.with_indifferent_access
       payload[:source] == "exchange" || payload[:portfolio_id].present?
+    end
+
+    def exchange_portfolio_source_for?(payload)
+      payload = payload.to_h.with_indifferent_access
+      exchange_source_for?(payload) && (
+        ActiveModel::Type::Boolean.new.cast(payload[:portfolio_account]) ||
+        payload[:coins].is_a?(Array)
+      )
     end
 
     def family_currency
@@ -232,6 +290,19 @@ class CoinstatsAccount < ApplicationRecord
       payload = payload.to_h.with_indifferent_access
       metadata = payload[:coin]
       metadata.is_a?(Hash) ? metadata.with_indifferent_access : payload
+    end
+
+    def extract_currency_amount(value, currency)
+      return parse_decimal(value) unless value.is_a?(Hash)
+
+      values = value.with_indifferent_access
+      target_currency = parse_currency(currency) || currency || "USD"
+
+      parse_decimal(
+        values[target_currency] ||
+        values[target_currency.to_s] ||
+        converted_usd_amount(values[:USD] || values["USD"], target_currency)
+      )
     end
 
     def fiat_identifier?(value)

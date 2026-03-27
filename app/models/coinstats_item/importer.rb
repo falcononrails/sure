@@ -80,21 +80,18 @@ class CoinstatsItem::Importer
   private
 
     def sync_exchange_accounts!
+      return unless coinstats_item.exchange_configured?
+      return if coinstats_item.coinstats_accounts.any?(&:exchange_source?)
+
       exchange_portfolio_configurations.each do |config|
         portfolio_coins = coinstats_provider.list_portfolio_coins(portfolio_id: config[:portfolio_id])
-        next if portfolio_coins.blank?
-
-        portfolio_coins.each do |coin_data|
-          next if zero_balance_portfolio_coin?(coin_data)
-
-          coinstats_account = upsert_exchange_account(
-            coin_data,
-            portfolio_id: config[:portfolio_id],
-            connection_id: config[:connection_id],
-            exchange_name: config[:exchange_name]
-          )
-          ensure_exchange_local_account!(coinstats_account)
-        end
+        coinstats_account = upsert_exchange_account(
+          portfolio_coins,
+          portfolio_id: config[:portfolio_id],
+          connection_id: config[:connection_id],
+          exchange_name: config[:exchange_name]
+        )
+        ensure_exchange_local_account!(coinstats_account)
       end
     rescue => e
       Rails.logger.warn "CoinstatsItem::Importer - Exchange account discovery failed: #{e.message}"
@@ -235,14 +232,22 @@ class CoinstatsItem::Importer
 
     def update_exchange_account(coinstats_account, portfolio_coins_data:, portfolio_transactions_data:)
       portfolio_id = exchange_portfolio_id_for(coinstats_account)
-      balance_data = find_matching_portfolio_coin(portfolio_coins_data[portfolio_id], coinstats_account)
+      balance_data = portfolio_coins_data[portfolio_id]
 
-      if balance_data.present?
+      if coinstats_account.exchange_portfolio_account?
         coinstats_account.upsert_coinstats_snapshot!(
-          normalize_portfolio_coin_data(balance_data, coinstats_account, portfolio_id: portfolio_id)
+          normalize_exchange_portfolio_data(balance_data, coinstats_account, portfolio_id: portfolio_id)
         )
       else
-        Rails.logger.warn "CoinstatsItem::Importer - No matching exchange coin found for account #{coinstats_account.id} (#{coinstats_account.account_id}) in portfolio #{portfolio_id}; preserving previous snapshot"
+        matching_coin = find_matching_portfolio_coin(balance_data, coinstats_account)
+
+        if matching_coin.present?
+          coinstats_account.upsert_coinstats_snapshot!(
+            normalize_portfolio_coin_data(matching_coin, coinstats_account, portfolio_id: portfolio_id)
+          )
+        else
+          Rails.logger.warn "CoinstatsItem::Importer - No matching exchange coin found for account #{coinstats_account.id} (#{coinstats_account.account_id}) in portfolio #{portfolio_id}; preserving previous snapshot"
+        end
       end
 
       transactions_count = fetch_and_merge_portfolio_transactions(coinstats_account, portfolio_transactions_data[portfolio_id])
@@ -298,7 +303,12 @@ class CoinstatsItem::Importer
     def fetch_and_merge_portfolio_transactions(coinstats_account, portfolio_transactions_data)
       return 0 if portfolio_transactions_data.blank?
 
-      relevant_transactions = filter_transactions_by_coin(portfolio_transactions_data, coinstats_account.account_id)
+      relevant_transactions =
+        if coinstats_account.exchange_portfolio_account?
+          Array(portfolio_transactions_data)
+        else
+          filter_transactions_by_coin(portfolio_transactions_data, coinstats_account.account_id)
+        end
       return 0 if relevant_transactions.empty?
 
       existing_transactions = coinstats_account.raw_transactions_payload.to_a
@@ -488,32 +498,40 @@ class CoinstatsItem::Importer
        .merge(portfolio_coin.slice(:coin, :count, :price, :averageBuy, :averageSell, :profit, :profitPercent, :coinId, :isFiat))
     end
 
-    def zero_balance_portfolio_coin?(coin_data)
-      coin_data = coin_data.with_indifferent_access
-      count_zero = coin_data[:count].to_d.zero?
-      return false unless count_zero
+    def normalize_exchange_portfolio_data(balance_data, coinstats_account, portfolio_id:)
+      existing_raw = coinstats_account.raw_payload.to_h.with_indifferent_access
+      coins = Array(balance_data).map { |coin| coin.with_indifferent_access.to_h }
 
-      average_buy = coin_data[:averageBuy].to_h.with_indifferent_access
-      profit = coin_data[:profit].to_h.with_indifferent_access
-      profit_percent = coin_data[:profitPercent].to_h.with_indifferent_access
+      snapshot = existing_raw.merge(
+        source: "exchange",
+        portfolio_account: true,
+        portfolio_id: portfolio_id,
+        connection_id: existing_raw[:connection_id] || coinstats_item.exchange_connection_id,
+        exchange_name: existing_raw[:exchange_name] || exchange_display_name,
+        name: coinstats_account.name,
+        institution_logo: existing_raw[:institution_logo].presence || coinstats_item.raw_institution_payload.to_h.with_indifferent_access[:icon],
+        coins: coins
+      )
 
-      no_activity_signal =
-        average_buy.blank? &&
-        profit.blank? &&
-        profit_percent.blank?
-
-      no_activity_signal
+      {
+        id: coinstats_account.account_id.presence || portfolio_account_id(portfolio_id),
+        name: coinstats_account.name,
+        balance: coinstats_account.inferred_current_balance(snapshot),
+        currency: coinstats_account.inferred_currency(snapshot),
+        provider: snapshot[:exchange_name],
+        account_status: "active",
+        portfolio_id: portfolio_id,
+        connection_id: snapshot[:connection_id],
+        institution_logo: snapshot[:institution_logo],
+        portfolio_account: true,
+        coins: coins
+      }.merge(snapshot.slice(:source, :exchange_name))
     end
 
-    def upsert_exchange_account(coin_data, portfolio_id:, connection_id:, exchange_name:)
-      coin_data = coin_data.with_indifferent_access
-      coin = coin_data[:coin].to_h.with_indifferent_access
-      coin_id = coin[:identifier].presence || coin[:symbol].presence || coin_data[:coinId].presence
-      raise ArgumentError, "CoinStats portfolio coin is missing an identifier" if coin_id.blank?
-
-      account_name = "#{coin[:name].presence || coin[:symbol].presence || coin_id.to_s.titleize} (#{exchange_name})"
+    def upsert_exchange_account(coins_data, portfolio_id:, connection_id:, exchange_name:)
+      account_name = exchange_name
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
-        account_id: coin_id.to_s,
+        account_id: portfolio_account_id(portfolio_id),
         wallet_address: portfolio_id
       )
       coinstats_account.name = account_name
@@ -521,15 +539,16 @@ class CoinstatsItem::Importer
       coinstats_account.account_status = "active"
       coinstats_account.wallet_address = portfolio_id
       coinstats_account.institution_metadata = {
-        logo: coin[:icon]
+        logo: coinstats_item.raw_institution_payload.to_h.with_indifferent_access[:icon]
       }.compact
       coinstats_account.raw_payload = {
         source: "exchange",
+        portfolio_account: true,
         portfolio_id: portfolio_id,
         connection_id: connection_id,
         exchange_name: exchange_name,
-        coin: coin.to_h
-      }.merge(coin_data.to_h)
+        coins: Array(coins_data).map(&:to_h)
+      }
       coinstats_account.currency = coinstats_account.inferred_currency
       coinstats_account.current_balance = coinstats_account.inferred_current_balance
       coinstats_account.save!
@@ -544,7 +563,7 @@ class CoinstatsItem::Importer
         name: coinstats_account.name,
         balance: coinstats_account.current_balance || 0,
         cash_balance: coinstats_account.inferred_cash_balance,
-        currency: coinstats_account.currency || "USD",
+        currency: coinstats_account.currency || family_currency,
         accountable_type: "Crypto",
         accountable_attributes: {
           subtype: "exchange",
@@ -590,6 +609,10 @@ class CoinstatsItem::Importer
     def exchange_portfolio_id_for(coinstats_account)
       raw = coinstats_account.raw_payload.to_h.with_indifferent_access
       raw[:portfolio_id].presence || coinstats_account.wallet_address.presence || coinstats_item.exchange_portfolio_id
+    end
+
+    def portfolio_account_id(portfolio_id)
+      "exchange_portfolio:#{portfolio_id}"
     end
 
     def family_currency

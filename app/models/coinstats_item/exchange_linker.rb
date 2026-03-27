@@ -35,8 +35,6 @@ class CoinstatsItem::ExchangeLinker
 
     coins = provider.list_portfolio_coins(portfolio_id: portfolio_id)
 
-    created_count = 0
-
     ActiveRecord::Base.transaction do
       coinstats_item.update!(
         exchange_connection_id: connection_id,
@@ -46,12 +44,8 @@ class CoinstatsItem::ExchangeLinker
         raw_institution_payload: exchange
       )
 
-      Array(coins).each do |coin_data|
-        next if zero_balance_coin?(coin_data)
-
-        coinstats_account = upsert_exchange_account!(coin_data, exchange, portfolio_id)
-        created_count += 1 if ensure_local_account!(coinstats_account)
-      end
+      coinstats_account = upsert_exchange_account!(coins, exchange, portfolio_id)
+      created_count = ensure_local_account!(coinstats_account) ? 1 : 0
     end
 
     coinstats_item.sync_later
@@ -89,28 +83,10 @@ class CoinstatsItem::ExchangeLinker
       "#{exchange[:name]} Portfolio"
     end
 
-    def zero_balance_coin?(coin_data)
-      coin_data = coin_data.with_indifferent_access
-      amount = coin_data[:count].to_d
-      return false unless amount.zero?
-
-      average_buy = coin_data[:averageBuy].to_h.with_indifferent_access
-      profit = coin_data[:profit].to_h.with_indifferent_access
-      profit_percent = coin_data[:profitPercent].to_h.with_indifferent_access
-
-      average_buy.blank? && profit.blank? && profit_percent.blank?
-    end
-
-    def upsert_exchange_account!(coin_data, exchange, portfolio_id)
-      coin_data = coin_data.with_indifferent_access
-      coin = coin_data[:coin].to_h.with_indifferent_access
-      coin_id = coin[:identifier].presence || coin_data[:coinId].presence || coin[:symbol].presence
-
-      raise ArgumentError, "CoinStats portfolio coin is missing an identifier" if coin_id.blank?
-
-      account_name = build_account_name(coin, exchange)
+    def upsert_exchange_account!(coins, exchange, portfolio_id)
+      account_name = name.presence || exchange[:name]
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
-        account_id: coin_id.to_s,
+        account_id: portfolio_account_id(portfolio_id),
         wallet_address: portfolio_id
       )
 
@@ -119,10 +95,10 @@ class CoinstatsItem::ExchangeLinker
       coinstats_account.account_status = "active"
       coinstats_account.wallet_address = portfolio_id
       coinstats_account.institution_metadata = {
-        logo: coin[:icon],
+        logo: exchange[:icon],
         exchange_logo: exchange[:icon]
       }.compact
-      coinstats_account.raw_payload = build_snapshot(coin_data, coin, exchange, portfolio_id)
+      coinstats_account.raw_payload = build_snapshot(coins, exchange, portfolio_id, account_name)
       coinstats_account.currency = coinstats_account.inferred_currency
       coinstats_account.current_balance = coinstats_account.inferred_current_balance
       coinstats_account.save!
@@ -137,7 +113,7 @@ class CoinstatsItem::ExchangeLinker
         name: coinstats_account.name,
         balance: coinstats_account.current_balance || 0,
         cash_balance: coinstats_account.inferred_cash_balance,
-        currency: coinstats_account.currency || "USD",
+        currency: coinstats_account.currency || coinstats_item.family.currency || "USD",
         accountable_type: "Crypto",
         accountable_attributes: {
           subtype: "exchange",
@@ -151,20 +127,21 @@ class CoinstatsItem::ExchangeLinker
       true
     end
 
-    def build_account_name(coin, exchange)
-      coin_name = coin[:name].presence || coin[:symbol].presence || coin[:identifier].to_s.titleize
-      "#{coin_name} (#{exchange[:name]})"
-    end
-
-    def build_snapshot(coin_data, coin, exchange, portfolio_id)
-      coin_data.to_h.merge(
+    def build_snapshot(coins, exchange, portfolio_id, account_name)
+      {
         source: "exchange",
+        portfolio_account: true,
         portfolio_id: portfolio_id,
         connection_id: exchange[:connection_id],
         exchange_name: exchange[:name],
-        id: coin[:identifier].presence || coin[:symbol],
-        name: build_account_name(coin, exchange),
-        institution_logo: coin[:icon]
-      )
+        id: portfolio_account_id(portfolio_id),
+        name: account_name,
+        institution_logo: exchange[:icon],
+        coins: Array(coins).map(&:to_h)
+      }
+    end
+
+    def portfolio_account_id(portfolio_id)
+      "exchange_portfolio:#{portfolio_id}"
     end
 end

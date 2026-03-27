@@ -1,5 +1,5 @@
 # Represents a CoinStats API connection for a family.
-# Stores credentials and manages associated crypto wallet accounts.
+# Stores credentials and manages associated wallet and exchange portfolio accounts.
 class CoinstatsItem < ApplicationRecord
   include Syncable, Provided, Unlinking
 
