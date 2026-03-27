@@ -137,6 +137,11 @@ class Account::CurrentBalanceManager
           changes_made = true
         end
 
+        if entry.currency != account.currency
+          entry.currency = account.currency
+          changes_made = true
+        end
+
         entry.save! if entry.changed?
       end
 
