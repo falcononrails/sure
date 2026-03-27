@@ -21,7 +21,7 @@ class Provider::CoinstatsAdapter < Provider::Base
     [ {
       key: "coinstats",
       name: "CoinStats",
-      description: "Connect to your crypto wallet via CoinStats",
+      description: "Connect a crypto wallet address or supported exchange via CoinStats",
       can_connect: true,
       new_account_path: ->(accountable_type, return_to) {
         Rails.application.routes.url_helpers.new_coinstats_item_path(

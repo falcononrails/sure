@@ -127,7 +127,7 @@ class CoinstatsEntry::Processor
     end
 
     def transaction_type
-      data[:type]
+      data[:type] || data[:transactionType]
     end
 
     def external_id

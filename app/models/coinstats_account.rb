@@ -69,6 +69,15 @@ class CoinstatsAccount < ApplicationRecord
     save!
   end
 
+  def wallet_source?
+    payload = raw_payload.to_h.with_indifferent_access
+    payload[:address].present? && payload[:blockchain].present?
+  end
+
+  def exchange_source?
+    raw_payload.to_h.with_indifferent_access[:portfolio_id].present?
+  end
+
   private
 
     def log_invalid_currency(currency_value)

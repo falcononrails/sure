@@ -40,7 +40,7 @@ module CoinstatsTransactionIdentifiable
     # @return [String, nil] Generated fallback ID or nil if insufficient data
     def build_fallback_transaction_id(tx)
       date = tx[:date]
-      type = tx[:type]
+      type = tx[:type] || tx[:transactionType]
       amount = tx.dig(:coinData, :count)
 
       # Require minimum fields for a valid fallback
@@ -54,10 +54,13 @@ module CoinstatsTransactionIdentifiable
         type,
         amount,
         tx.dig(:coinData, :symbol),
+        tx.dig(:coinData, :identifier),
         tx.dig(:fee, :count),
         tx.dig(:fee, :coin, :symbol),
         tx.dig(:transactions, 0, :action),
+        tx.dig(:transfers, 0, :transferType),
         tx.dig(:transactions, 0, :items, 0, :coin, :id),
+        tx.dig(:transfers, 0, :items, 0, :coin, :identifier),
         tx.dig(:transactions, 0, :items, 0, :count)
       ].compact
 

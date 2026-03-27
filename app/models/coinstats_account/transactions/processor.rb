@@ -94,8 +94,10 @@ class CoinstatsAccount::Transactions::Processor
       transactions.select do |tx|
         tx = tx.with_indifferent_access
 
+        coin_identifier = tx.dig(:coinData, :identifier)&.to_s&.downcase
         # Check coin ID in transactions[0].items[0].coin.id (most common location)
         coin_id = tx.dig(:transactions, 0, :items, 0, :coin, :id)&.to_s&.downcase
+        transfer_coin_id = tx.dig(:transfers, 0, :items, 0, :coin, :identifier)&.to_s&.downcase
 
         # Also check coinData for symbol match as fallback
         coin_symbol = tx.dig(:coinData, :symbol)&.to_s&.downcase
@@ -106,6 +108,8 @@ class CoinstatsAccount::Transactions::Processor
         # - A whole word (bounded by word boundaries), OR
         # - Inside parentheses like "(ETH)" which is common in wallet naming conventions
         coin_id == account_id ||
+          transfer_coin_id == account_id ||
+          coin_identifier == account_id ||
           (coin_symbol.present? && symbol_matches_name?(coin_symbol, coinstats_account.name))
       end
     end
