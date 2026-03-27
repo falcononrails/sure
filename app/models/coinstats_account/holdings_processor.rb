@@ -22,7 +22,7 @@ class CoinstatsAccount::HoldingsProcessor
       security: security,
       quantity: quantity.abs,
       amount: amount,
-      currency: account.currency,
+      currency: coinstats_account.inferred_currency,
       date: Date.current,
       price: price,
       cost_basis: coinstats_account.average_buy_price,

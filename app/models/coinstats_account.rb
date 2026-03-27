@@ -82,9 +82,11 @@ class CoinstatsAccount < ApplicationRecord
     payload = payload.to_h.with_indifferent_access
     metadata = asset_metadata(payload)
 
-    metadata[:isFiat] == true ||
-      payload[:isFiat] == true ||
-      parse_currency(metadata[:symbol]).present?
+    ActiveModel::Type::Boolean.new.cast(metadata[:isFiat]) ||
+      ActiveModel::Type::Boolean.new.cast(payload[:isFiat]) ||
+      fiat_identifier?(metadata[:identifier]) ||
+      fiat_identifier?(payload[:coinId]) ||
+      fiat_identifier?(account_id)
   end
 
   def crypto_asset?
@@ -115,6 +117,8 @@ class CoinstatsAccount < ApplicationRecord
 
     if fiat_asset?(payload)
       asset_quantity(payload).abs
+    elsif exchange_source_for?(payload)
+      asset_quantity(payload).abs * asset_price(payload)
     else
       explicit_balance = payload[:balance] || payload[:current_balance]
       return parse_decimal(explicit_balance) if explicit_balance.present?
@@ -228,6 +232,10 @@ class CoinstatsAccount < ApplicationRecord
       payload = payload.to_h.with_indifferent_access
       metadata = payload[:coin]
       metadata.is_a?(Hash) ? metadata.with_indifferent_access : payload
+    end
+
+    def fiat_identifier?(value)
+      value.to_s.start_with?("FiatCoin")
     end
 
     def parse_decimal(value)
