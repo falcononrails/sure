@@ -438,12 +438,19 @@ class CoinstatsItem::Importer
       existing_raw = coinstats_account.raw_payload.to_h.with_indifferent_access
       portfolio_coin = balance_data.to_h.with_indifferent_access
       coin = portfolio_coin[:coin].to_h.with_indifferent_access
+      source_snapshot = {
+        source: existing_raw[:source] || "exchange",
+        portfolio_id: existing_raw[:portfolio_id] || coinstats_item.exchange_portfolio_id,
+        connection_id: existing_raw[:connection_id] || coinstats_item.exchange_connection_id,
+        exchange_name: existing_raw[:exchange_name] || exchange_display_name,
+        coin: coin
+      }.merge(portfolio_coin)
 
       {
         id: coin[:identifier].presence || coinstats_account.account_id,
         name: coinstats_account.name,
-        balance: coinstats_account.inferred_current_balance(portfolio_coin),
-        currency: coinstats_account.inferred_currency(portfolio_coin),
+        balance: coinstats_account.inferred_current_balance(source_snapshot),
+        currency: coinstats_account.inferred_currency(source_snapshot),
         provider: exchange_display_name,
         account_status: "active",
         portfolio_id: existing_raw[:portfolio_id] || coinstats_item.exchange_portfolio_id,
@@ -451,7 +458,7 @@ class CoinstatsItem::Importer
         institution_logo: coin[:icon],
         raw_balance_data: portfolio_coin
       }.merge(existing_raw.slice(:source, :exchange_name))
-       .merge(portfolio_coin.slice(:coin, :count, :price, :averageBuy, :coinId, :isFiat))
+       .merge(portfolio_coin.slice(:coin, :count, :price, :averageBuy, :averageSell, :profit, :profitPercent, :coinId, :isFiat))
     end
 
     def zero_balance_portfolio_coin?(coin_data)
