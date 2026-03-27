@@ -162,18 +162,30 @@ class CoinstatsItem::Importer
       return [] unless coinstats_item.exchange_configured?
       return [] if linked_accounts.empty?
 
-      coinstats_provider.sync_portfolio(portfolio_id: coinstats_item.exchange_portfolio_id)
-
       from = coinstats_item.sync_start_date&.iso8601
-      Rails.logger.info "CoinstatsItem::Importer - Fetching portfolio transactions for CoinStats exchange #{coinstats_item.exchange_portfolio_id}"
-      coinstats_provider.list_portfolio_transactions(
+      Rails.logger.info "CoinstatsItem::Importer - Fetching exchange transactions for CoinStats exchange #{coinstats_item.exchange_portfolio_id} in #{family_currency}"
+
+      coinstats_provider.sync_exchange(portfolio_id: coinstats_item.exchange_portfolio_id)
+
+      coinstats_provider.list_exchange_transactions(
         portfolio_id: coinstats_item.exchange_portfolio_id,
-        currency: "USD",
+        currency: family_currency,
         from: from
       )
     rescue => e
-      Rails.logger.warn "CoinstatsItem::Importer - Portfolio transactions fetch failed: #{e.message}"
-      []
+      Rails.logger.warn "CoinstatsItem::Importer - Exchange transactions fetch failed: #{e.message}; falling back to portfolio transactions"
+
+      begin
+        coinstats_provider.sync_portfolio(portfolio_id: coinstats_item.exchange_portfolio_id)
+        coinstats_provider.list_portfolio_transactions(
+          portfolio_id: coinstats_item.exchange_portfolio_id,
+          currency: family_currency,
+          from: from
+        )
+      rescue => fallback_error
+        Rails.logger.warn "CoinstatsItem::Importer - Portfolio transaction fallback failed: #{fallback_error.message}"
+        []
+      end
     end
 
     # Updates a single account with balance and transaction data.
@@ -481,5 +493,9 @@ class CoinstatsItem::Importer
 
     def exchange_display_name
       coinstats_item.institution_name.presence || coinstats_item.exchange_connection_id.to_s.titleize
+    end
+
+    def family_currency
+      coinstats_item.family.currency.presence || "USD"
     end
 end

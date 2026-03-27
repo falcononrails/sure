@@ -206,7 +206,57 @@ class Provider::Coinstats < Provider
       raise response.error unless response.success?
 
       payload = response.data.with_indifferent_access
-      page_results = Array(payload[:data])
+      page_results = Array(payload[:data] || payload[:result])
+      results.concat(page_results)
+
+      break if page_results.size < limit
+
+      page += 1
+    end
+
+    results
+  end
+
+  # Get transaction data for a specific exchange portfolio.
+  # https://coinstats.app/api-docs/openapi/get-exchange-transactions
+  def get_exchange_transactions(portfolio_id:, currency: "USD", page: 1, limit: 100, from: nil, to: nil)
+    with_provider_response do
+      res = self.class.get(
+        "#{BASE_URL}/exchange/transactions",
+        headers: auth_headers,
+        query: {
+          portfolioId: portfolio_id,
+          currency: currency,
+          page: page,
+          limit: limit,
+          from: from,
+          to: to
+        }.compact
+      )
+      handle_response(res)
+    end
+  rescue SocketError, Net::OpenTimeout, Net::ReadTimeout => e
+    Rails.logger.error "CoinStats API: GET /exchange/transactions failed: #{e.class}: #{e.message}"
+    raise Error, "CoinStats API request failed: #{e.message}"
+  end
+
+  def list_exchange_transactions(portfolio_id:, currency: "USD", limit: 100, from: nil, to: nil)
+    page = 1
+    results = []
+
+    loop do
+      response = get_exchange_transactions(
+        portfolio_id: portfolio_id,
+        currency: currency,
+        page: page,
+        limit: limit,
+        from: from,
+        to: to
+      )
+      raise response.error unless response.success?
+
+      payload = response.data.with_indifferent_access
+      page_results = Array(payload[:result] || payload[:data])
       results.concat(page_results)
 
       break if page_results.size < limit
@@ -230,6 +280,22 @@ class Provider::Coinstats < Provider
     end
   rescue SocketError, Net::OpenTimeout, Net::ReadTimeout => e
     Rails.logger.error "CoinStats API: PATCH /portfolio/sync failed: #{e.class}: #{e.message}"
+    raise Error, "CoinStats API request failed: #{e.message}"
+  end
+
+  # Trigger a fresh CoinStats exchange sync for the portfolio.
+  # https://coinstats.app/api-docs/openapi/exchange-sync-status
+  def sync_exchange(portfolio_id:)
+    with_provider_response do
+      res = self.class.patch(
+        "#{BASE_URL}/exchange/sync",
+        headers: auth_headers,
+        query: { portfolioId: portfolio_id }
+      )
+      handle_response(res)
+    end
+  rescue SocketError, Net::OpenTimeout, Net::ReadTimeout => e
+    Rails.logger.error "CoinStats API: PATCH /exchange/sync failed: #{e.class}: #{e.message}"
     raise Error, "CoinStats API request failed: #{e.message}"
   end
 

@@ -106,7 +106,7 @@ class CoinstatsEntry::Processor
       if fee_data.present?
         cs["fee_amount"] = fee_data[:count] if fee_data[:count].present?
         cs["fee_symbol"] = fee_data.dig(:coin, :symbol) if fee_data.dig(:coin, :symbol).present?
-        cs["fee_usd"] = fee_data[:totalWorth] if fee_data[:totalWorth].present?
+        cs["fee_value"] = fee_data[:totalWorth] if fee_data[:totalWorth].present?
       end
 
       return nil if cs.empty?
@@ -281,7 +281,7 @@ class CoinstatsEntry::Processor
       if profit_loss[:profit].present?
         profit_formatted = profit_loss[:profit].to_f.round(2)
         percent_formatted = profit_loss[:profitPercent].to_f.round(2)
-        parts << "P/L: $#{profit_formatted} (#{percent_formatted}%)"
+        parts << "P/L: #{profit_formatted} #{currency} (#{percent_formatted}%)"
       end
 
       # Include explorer URL for reference

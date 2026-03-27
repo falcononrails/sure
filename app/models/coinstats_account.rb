@@ -71,11 +71,11 @@ class CoinstatsAccount < ApplicationRecord
 
   def wallet_source?
     payload = raw_payload.to_h.with_indifferent_access
-    payload[:address].present? && payload[:blockchain].present?
+    payload[:source] == "wallet" || (payload[:address].present? && payload[:blockchain].present?)
   end
 
   def exchange_source?
-    raw_payload.to_h.with_indifferent_access[:portfolio_id].present?
+    exchange_source_for?(raw_payload)
   end
 
   def fiat_asset?(payload = raw_payload)
@@ -94,7 +94,16 @@ class CoinstatsAccount < ApplicationRecord
   def inferred_currency(payload = raw_payload)
     payload = payload.to_h.with_indifferent_access
 
-    if fiat_asset?(payload)
+    if exchange_source_for?(payload)
+      if fiat_asset?(payload)
+        parse_currency(asset_metadata(payload)[:symbol]) ||
+          parse_currency(payload[:currency]) ||
+          family_currency ||
+          "USD"
+      else
+        preferred_exchange_currency
+      end
+    elsif fiat_asset?(payload)
       parse_currency(asset_metadata(payload)[:symbol]) || parse_currency(payload[:currency]) || "USD"
     else
       parse_currency(payload[:currency]) || "USD"
@@ -135,10 +144,14 @@ class CoinstatsAccount < ApplicationRecord
   def asset_price(payload = raw_payload, currency: inferred_currency(payload))
     payload = payload.to_h.with_indifferent_access
     price_data = payload[:price]
+    target_currency = parse_currency(currency) || currency || "USD"
 
     raw_price =
       if price_data.is_a?(Hash)
-        price_data.with_indifferent_access[currency] || price_data.with_indifferent_access[:USD]
+        prices = price_data.with_indifferent_access
+        prices[target_currency] ||
+          prices[target_currency.to_s] ||
+          converted_usd_amount(prices[:USD] || prices["USD"], target_currency)
       else
         price_data || payload[:priceUsd]
       end
@@ -148,16 +161,69 @@ class CoinstatsAccount < ApplicationRecord
 
   def average_buy_price(payload = raw_payload, currency: inferred_currency(payload))
     payload = payload.to_h.with_indifferent_access
-    average_buy = payload[:averageBuy].to_h.with_indifferent_access
-    all_time = average_buy[:allTime].to_h.with_indifferent_access
+    average_buy = payload[:averageBuy]
+    return nil if average_buy.blank?
 
-    raw_cost_basis = all_time[currency] || all_time[:USD]
+    average_buy_hash = average_buy.to_h.with_indifferent_access
+    nested_all_time = average_buy_hash[:allTime].to_h.with_indifferent_access
+    target_currency = parse_currency(currency) || currency || "USD"
+
+    raw_cost_basis =
+      average_buy_hash[target_currency] ||
+      average_buy_hash[target_currency.to_s] ||
+      nested_all_time[target_currency] ||
+      nested_all_time[target_currency.to_s] ||
+      converted_usd_amount(
+        average_buy_hash[:USD] || average_buy_hash["USD"] ||
+        nested_all_time[:USD] || nested_all_time["USD"],
+        target_currency
+      )
     return nil if raw_cost_basis.blank?
 
     parse_decimal(raw_cost_basis)
   end
 
   private
+    def exchange_source_for?(payload)
+      payload = payload.to_h.with_indifferent_access
+      payload[:source] == "exchange" || payload[:portfolio_id].present?
+    end
+
+    def family_currency
+      parse_currency(coinstats_item&.family&.currency)
+    end
+
+    def preferred_exchange_currency
+      return "USD" unless family_currency.present?
+      return family_currency if exchange_rate_available?(from: "USD", to: family_currency)
+
+      "USD"
+    end
+
+    def exchange_rate_available?(from:, to:)
+      return true if from == to
+
+      ExchangeRate.find_or_fetch_rate(from: from, to: to, date: Date.current).present?
+    rescue StandardError => e
+      Rails.logger.warn("CoinstatsAccount #{id} - Failed to load FX #{from}/#{to}: #{e.class} - #{e.message}")
+      false
+    end
+
+    def converted_usd_amount(raw_usd_amount, target_currency)
+      return raw_usd_amount if raw_usd_amount.blank?
+      return raw_usd_amount if target_currency == "USD"
+
+      usd_amount = parse_decimal(raw_usd_amount)
+      return if usd_amount.zero? && raw_usd_amount.to_s != "0"
+
+      return unless exchange_rate_available?(from: "USD", to: target_currency)
+
+      Money.new(usd_amount, "USD").exchange_to(target_currency).amount
+    rescue StandardError => e
+      Rails.logger.warn("CoinstatsAccount #{id} - Failed to convert USD -> #{target_currency}: #{e.class} - #{e.message}")
+      nil
+    end
+
     def asset_metadata(payload)
       payload = payload.to_h.with_indifferent_access
       metadata = payload[:coin]
