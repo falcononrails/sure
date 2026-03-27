@@ -238,14 +238,14 @@ class Provider::Coinstats < Provider
   def get_portfolio_sync_status(portfolio_id:)
     with_provider_response do
       res = self.class.get(
-        "#{BASE_URL}/portfolio/sync",
+        "#{BASE_URL}/portfolio/status",
         headers: auth_headers,
         query: { portfolioId: portfolio_id }
       )
       handle_response(res)
     end
   rescue SocketError, Net::OpenTimeout, Net::ReadTimeout => e
-    Rails.logger.error "CoinStats API: GET /portfolio/sync failed: #{e.class}: #{e.message}"
+    Rails.logger.error "CoinStats API: GET /portfolio/status failed: #{e.class}: #{e.message}"
     raise Error, "CoinStats API request failed: #{e.message}"
   end
 
