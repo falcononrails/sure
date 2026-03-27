@@ -96,6 +96,15 @@ class CoinstatsEntry::Processor
         cs["count"] = coin_data[:count] if coin_data[:count].present?
       end
 
+      if matched_item.present?
+        cs["matched_item"] = {
+          "count" => matched_item[:count],
+          "total_worth" => matched_item[:totalWorth],
+          "coin_id" => matched_item.dig(:coin, :id),
+          "coin_symbol" => matched_item.dig(:coin, :symbol)
+        }.compact
+      end
+
       # Store profit/loss info
       if profit_loss.present?
         cs["profit"] = profit_loss[:profit] if profit_loss[:profit].present?
@@ -158,7 +167,7 @@ class CoinstatsEntry::Processor
 
     def name
       tx_type = transaction_type || "Transaction"
-      symbol = coin_data[:symbol]
+      symbol = matched_symbol || coin_data[:symbol]
 
       # Get coin name from nested transaction items if available (used as fallback)
       coin_name = transactions_data.dig(0, :items, 0, :coin, :name)
@@ -174,18 +183,23 @@ class CoinstatsEntry::Processor
 
     def amount
       if coinstats_account.exchange_source? && coinstats_account.fiat_asset?
-        absolute_amount = coin_data[:count].to_d.abs
+        fiat_value = matched_item_total_worth.abs
+        absolute_amount = fiat_value.positive? ? fiat_value : coin_data[:count].to_d.abs
         return outgoing_transaction_type? ? absolute_amount : -absolute_amount
       end
 
-      # Use currentValue from coinData (USD value) or profitLoss
-      usd_value = coin_data[:currentValue] || profit_loss[:currentValue] || 0
+      raw_value =
+        if coinstats_account.exchange_source?
+          matched_item_total_worth.nonzero? || coin_data[:currentValue] || profit_loss[:currentValue] || 0
+        else
+          coin_data[:currentValue] || profit_loss[:currentValue] || 0
+        end
 
-      parsed_amount = case usd_value
+      parsed_amount = case raw_value
       when String
-        BigDecimal(usd_value)
+        BigDecimal(raw_value)
       when Numeric
-        BigDecimal(usd_value.to_s)
+        BigDecimal(raw_value.to_s)
       else
         BigDecimal("0")
       end
@@ -301,14 +315,14 @@ class CoinstatsEntry::Processor
     end
 
     def trade_security
-      symbol = coinstats_account.asset_symbol
+      symbol = matched_symbol || coinstats_account.asset_symbol
       return if symbol.blank?
 
       Security::Resolver.new(symbol.start_with?("CRYPTO:") ? symbol : "CRYPTO:#{symbol}").resolve
     end
 
     def trade_quantity
-      coin_data[:count].to_d
+      matched_item_count.nonzero? || coin_data[:count].to_d
     end
 
     def trade_price
@@ -316,7 +330,7 @@ class CoinstatsEntry::Processor
         quantity = trade_quantity.abs
         return 0.to_d if quantity.zero?
 
-        value = coin_data[:currentValue] || coin_data[:totalWorth] || profit_loss[:currentValue] || 0
+        value = matched_item_total_worth.nonzero? || coin_data[:currentValue] || coin_data[:totalWorth] || profit_loss[:currentValue] || 0
         BigDecimal(value.to_s).abs / quantity
       rescue ArgumentError
         0.to_d
@@ -358,5 +372,43 @@ class CoinstatsEntry::Processor
       )
 
       legacy_entry&.destroy!
+    end
+
+    def matched_symbol
+      matched_item&.dig(:coin, :symbol)
+    end
+
+    def matched_item
+      @matched_item ||= begin
+        items = transaction_items
+        account_id = coinstats_account.account_id.to_s.downcase
+        account_symbol = coinstats_account.asset_symbol.to_s.downcase
+
+        items.find do |item|
+          coin = item[:coin].to_h.with_indifferent_access
+          coin[:id]&.to_s&.downcase == account_id ||
+            coin[:identifier]&.to_s&.downcase == account_id ||
+            coin[:symbol]&.to_s&.downcase == account_symbol
+        end
+      end
+    end
+
+    def matched_item_count
+      matched_item&.[](:count).to_d
+    end
+
+    def matched_item_total_worth
+      matched_item&.[](:totalWorth).to_d
+    end
+
+    def transaction_items
+      @transaction_items ||= begin
+        Array(transactions_data).flat_map do |entry|
+          Array(entry.with_indifferent_access[:items]).map(&:with_indifferent_access)
+        end +
+          Array(data[:transfers]).flat_map do |entry|
+            Array(entry.with_indifferent_access[:items]).map(&:with_indifferent_access)
+          end
+      end
     end
 end

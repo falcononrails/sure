@@ -90,8 +90,15 @@ class CoinstatsItem::ExchangeLinker
     end
 
     def zero_balance_coin?(coin_data)
-      amount = coin_data.with_indifferent_access[:count].to_d
-      amount.zero?
+      coin_data = coin_data.with_indifferent_access
+      amount = coin_data[:count].to_d
+      return false unless amount.zero?
+
+      average_buy = coin_data[:averageBuy].to_h.with_indifferent_access
+      profit = coin_data[:profit].to_h.with_indifferent_access
+      profit_percent = coin_data[:profitPercent].to_h.with_indifferent_access
+
+      average_buy.blank? && profit.blank? && profit_percent.blank?
     end
 
     def upsert_exchange_account!(coin_data, exchange, portfolio_id)

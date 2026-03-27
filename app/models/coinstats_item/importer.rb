@@ -324,11 +324,29 @@ class CoinstatsItem::Importer
             next false unless coin.present?
 
             coin = coin.with_indifferent_access
-            coin[:id]&.downcase == coin_id_downcase
+            coin[:id]&.downcase == coin_id_downcase ||
+              coin[:identifier]&.downcase == coin_id_downcase ||
+              coin[:symbol]&.downcase == coin_id_downcase
           end
         end
 
-        coin_identifier == coin_id_downcase || matches_nested_item
+        transfer_transactions = tx[:transfers] || []
+        matches_transfer_item = transfer_transactions.any? do |transfer_tx|
+          transfer_tx = transfer_tx.with_indifferent_access
+          items = transfer_tx[:items] || []
+          items.any? do |item|
+            item = item.with_indifferent_access
+            coin = item[:coin]
+            next false unless coin.present?
+
+            coin = coin.with_indifferent_access
+            coin[:id]&.downcase == coin_id_downcase ||
+              coin[:identifier]&.downcase == coin_id_downcase ||
+              coin[:symbol]&.downcase == coin_id_downcase
+          end
+        end
+
+        coin_identifier == coin_id_downcase || matches_nested_item || matches_transfer_item
       end
     end
 
@@ -437,7 +455,20 @@ class CoinstatsItem::Importer
     end
 
     def zero_balance_portfolio_coin?(coin_data)
-      coin_data.with_indifferent_access[:count].to_d.zero?
+      coin_data = coin_data.with_indifferent_access
+      count_zero = coin_data[:count].to_d.zero?
+      return false unless count_zero
+
+      average_buy = coin_data[:averageBuy].to_h.with_indifferent_access
+      profit = coin_data[:profit].to_h.with_indifferent_access
+      profit_percent = coin_data[:profitPercent].to_h.with_indifferent_access
+
+      no_activity_signal =
+        average_buy.blank? &&
+        profit.blank? &&
+        profit_percent.blank?
+
+      no_activity_signal
     end
 
     def upsert_exchange_account(coin_data)
