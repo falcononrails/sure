@@ -165,13 +165,9 @@ module ApplicationHelper
     abs_qty = qty.abs
 
     precision = if abs_qty >= 1
-      1     # "10.5"
-    elsif abs_qty >= 0.01
-      2     # "0.52"
-    elsif abs_qty >= 0.0001
-      4     # "0.0005"
+      2     # "10.5", "44.49"
     else
-      8     # "0.00000052"
+      8     # "0.00335845", "0.05580825"
     end
 
     # Use strip_insignificant_zeros to avoid trailing zeros like "0.50000000"
