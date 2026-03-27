@@ -80,16 +80,21 @@ class CoinstatsItem::Importer
   private
 
     def sync_exchange_accounts!
-      return unless coinstats_item.exchange_configured?
+      exchange_portfolio_configurations.each do |config|
+        portfolio_coins = coinstats_provider.list_portfolio_coins(portfolio_id: config[:portfolio_id])
+        next if portfolio_coins.blank?
 
-      portfolio_coins = coinstats_provider.list_portfolio_coins(portfolio_id: coinstats_item.exchange_portfolio_id)
-      return if portfolio_coins.blank?
+        portfolio_coins.each do |coin_data|
+          next if zero_balance_portfolio_coin?(coin_data)
 
-      portfolio_coins.each do |coin_data|
-        next if zero_balance_portfolio_coin?(coin_data)
-
-        coinstats_account = upsert_exchange_account(coin_data)
-        ensure_exchange_local_account!(coinstats_account)
+          coinstats_account = upsert_exchange_account(
+            coin_data,
+            portfolio_id: config[:portfolio_id],
+            connection_id: config[:connection_id],
+            exchange_name: config[:exchange_name]
+          )
+          ensure_exchange_local_account!(coinstats_account)
+        end
       end
     rescue => e
       Rails.logger.warn "CoinstatsItem::Importer - Exchange account discovery failed: #{e.message}"
@@ -122,14 +127,15 @@ class CoinstatsItem::Importer
     end
 
     def fetch_portfolio_coins_for_exchange(linked_accounts)
-      return [] unless coinstats_item.exchange_configured?
-      return [] if linked_accounts.empty?
+      return {} if linked_accounts.empty? && !coinstats_item.exchange_configured?
 
-      Rails.logger.info "CoinstatsItem::Importer - Fetching portfolio coins for CoinStats exchange #{coinstats_item.exchange_portfolio_id}"
-      coinstats_provider.list_portfolio_coins(portfolio_id: coinstats_item.exchange_portfolio_id)
+      exchange_portfolio_configurations(linked_accounts).each_with_object({}) do |config, results|
+        Rails.logger.info "CoinstatsItem::Importer - Fetching portfolio coins for CoinStats exchange #{config[:portfolio_id]}"
+        results[config[:portfolio_id]] = coinstats_provider.list_portfolio_coins(portfolio_id: config[:portfolio_id])
+      end
     rescue => e
       Rails.logger.warn "CoinstatsItem::Importer - Portfolio coins fetch failed: #{e.message}"
-      []
+      {}
     end
 
     # Fetch transaction data for all linked accounts using the bulk endpoint
@@ -159,33 +165,40 @@ class CoinstatsItem::Importer
     end
 
     def fetch_portfolio_transactions_for_exchange(linked_accounts)
-      return [] unless coinstats_item.exchange_configured?
-      return [] if linked_accounts.empty?
+      return {} if linked_accounts.empty? && !coinstats_item.exchange_configured?
 
       from = coinstats_item.sync_start_date&.iso8601
-      Rails.logger.info "CoinstatsItem::Importer - Fetching exchange transactions for CoinStats exchange #{coinstats_item.exchange_portfolio_id} in #{family_currency}"
 
-      coinstats_provider.sync_exchange(portfolio_id: coinstats_item.exchange_portfolio_id)
+      exchange_portfolio_configurations(linked_accounts).each_with_object({}) do |config, results|
+        Rails.logger.info "CoinstatsItem::Importer - Fetching exchange transactions for CoinStats exchange #{config[:portfolio_id]} in #{family_currency}"
 
-      coinstats_provider.list_exchange_transactions(
-        portfolio_id: coinstats_item.exchange_portfolio_id,
-        currency: family_currency,
-        from: from
-      )
-    rescue => e
-      Rails.logger.warn "CoinstatsItem::Importer - Exchange transactions fetch failed: #{e.message}; falling back to portfolio transactions"
+        begin
+          coinstats_provider.sync_exchange(portfolio_id: config[:portfolio_id])
 
-      begin
-        coinstats_provider.sync_portfolio(portfolio_id: coinstats_item.exchange_portfolio_id)
-        coinstats_provider.list_portfolio_transactions(
-          portfolio_id: coinstats_item.exchange_portfolio_id,
-          currency: family_currency,
-          from: from
-        )
-      rescue => fallback_error
-        Rails.logger.warn "CoinstatsItem::Importer - Portfolio transaction fallback failed: #{fallback_error.message}"
-        []
+          results[config[:portfolio_id]] = coinstats_provider.list_exchange_transactions(
+            portfolio_id: config[:portfolio_id],
+            currency: family_currency,
+            from: from
+          )
+        rescue => e
+          Rails.logger.warn "CoinstatsItem::Importer - Exchange transactions fetch failed for #{config[:portfolio_id]}: #{e.message}; falling back to portfolio transactions"
+
+          begin
+            coinstats_provider.sync_portfolio(portfolio_id: config[:portfolio_id])
+            results[config[:portfolio_id]] = coinstats_provider.list_portfolio_transactions(
+              portfolio_id: config[:portfolio_id],
+              currency: family_currency,
+              from: from
+            )
+          rescue => fallback_error
+            Rails.logger.warn "CoinstatsItem::Importer - Portfolio transaction fallback failed for #{config[:portfolio_id]}: #{fallback_error.message}"
+            results[config[:portfolio_id]] = []
+          end
+        end
       end
+    rescue => e
+      Rails.logger.warn "CoinstatsItem::Importer - Exchange transactions fetch failed: #{e.message}"
+      {}
     end
 
     # Updates a single account with balance and transaction data.
@@ -221,10 +234,18 @@ class CoinstatsItem::Importer
     end
 
     def update_exchange_account(coinstats_account, portfolio_coins_data:, portfolio_transactions_data:)
-      balance_data = find_matching_portfolio_coin(portfolio_coins_data, coinstats_account)
-      coinstats_account.upsert_coinstats_snapshot!(normalize_portfolio_coin_data(balance_data, coinstats_account))
+      portfolio_id = exchange_portfolio_id_for(coinstats_account)
+      balance_data = find_matching_portfolio_coin(portfolio_coins_data[portfolio_id], coinstats_account)
 
-      transactions_count = fetch_and_merge_portfolio_transactions(coinstats_account, portfolio_transactions_data)
+      if balance_data.present?
+        coinstats_account.upsert_coinstats_snapshot!(
+          normalize_portfolio_coin_data(balance_data, coinstats_account, portfolio_id: portfolio_id)
+        )
+      else
+        Rails.logger.warn "CoinstatsItem::Importer - No matching exchange coin found for account #{coinstats_account.id} (#{coinstats_account.account_id}) in portfolio #{portfolio_id}; preserving previous snapshot"
+      end
+
+      transactions_count = fetch_and_merge_portfolio_transactions(coinstats_account, portfolio_transactions_data[portfolio_id])
 
       { success: true, transactions_count: transactions_count }
     end
@@ -430,17 +451,23 @@ class CoinstatsItem::Importer
       Array(balance_data).map(&:with_indifferent_access).find do |coin_data|
         coin = coin_data[:coin].to_h.with_indifferent_access
         identifier = coin[:identifier].presence || coin_data[:coinId].presence
-        identifier.to_s == coinstats_account.account_id.to_s
+        symbol = coin[:symbol].presence || coin_data[:symbol].presence
+        base_name = coinstats_account.name.to_s.sub(/\s+\([^)]*\)\z/, "").downcase
+
+        identifier.to_s.casecmp?(coinstats_account.account_id.to_s) ||
+          symbol.to_s.casecmp?(coinstats_account.account_id.to_s) ||
+          symbol.to_s.casecmp?(coinstats_account.asset_symbol.to_s) ||
+          coin[:name].to_s.downcase == base_name
       end
     end
 
-    def normalize_portfolio_coin_data(balance_data, coinstats_account)
+    def normalize_portfolio_coin_data(balance_data, coinstats_account, portfolio_id:)
       existing_raw = coinstats_account.raw_payload.to_h.with_indifferent_access
       portfolio_coin = balance_data.to_h.with_indifferent_access
       coin = portfolio_coin[:coin].to_h.with_indifferent_access
       source_snapshot = {
         source: existing_raw[:source] || "exchange",
-        portfolio_id: existing_raw[:portfolio_id] || coinstats_item.exchange_portfolio_id,
+        portfolio_id: portfolio_id,
         connection_id: existing_raw[:connection_id] || coinstats_item.exchange_connection_id,
         exchange_name: existing_raw[:exchange_name] || exchange_display_name,
         coin: coin
@@ -451,9 +478,9 @@ class CoinstatsItem::Importer
         name: coinstats_account.name,
         balance: coinstats_account.inferred_current_balance(source_snapshot),
         currency: coinstats_account.inferred_currency(source_snapshot),
-        provider: exchange_display_name,
+        provider: existing_raw[:exchange_name].presence || exchange_display_name,
         account_status: "active",
-        portfolio_id: existing_raw[:portfolio_id] || coinstats_item.exchange_portfolio_id,
+        portfolio_id: portfolio_id,
         connection_id: existing_raw[:connection_id] || coinstats_item.exchange_connection_id,
         institution_logo: coin[:icon],
         raw_balance_data: portfolio_coin
@@ -478,28 +505,29 @@ class CoinstatsItem::Importer
       no_activity_signal
     end
 
-    def upsert_exchange_account(coin_data)
+    def upsert_exchange_account(coin_data, portfolio_id:, connection_id:, exchange_name:)
       coin_data = coin_data.with_indifferent_access
       coin = coin_data[:coin].to_h.with_indifferent_access
       coin_id = coin[:identifier].presence || coin[:symbol].presence || coin_data[:coinId].presence
       raise ArgumentError, "CoinStats portfolio coin is missing an identifier" if coin_id.blank?
 
-      account_name = "#{coin[:name].presence || coin[:symbol].presence || coin_id.to_s.titleize} (#{exchange_display_name})"
+      account_name = "#{coin[:name].presence || coin[:symbol].presence || coin_id.to_s.titleize} (#{exchange_name})"
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
         account_id: coin_id.to_s,
-        wallet_address: nil
+        wallet_address: portfolio_id
       )
       coinstats_account.name = account_name
-      coinstats_account.provider = exchange_display_name
+      coinstats_account.provider = exchange_name
       coinstats_account.account_status = "active"
+      coinstats_account.wallet_address = portfolio_id
       coinstats_account.institution_metadata = {
         logo: coin[:icon]
       }.compact
       coinstats_account.raw_payload = {
         source: "exchange",
-        portfolio_id: coinstats_item.exchange_portfolio_id,
-        connection_id: coinstats_item.exchange_connection_id,
-        exchange_name: exchange_display_name,
+        portfolio_id: portfolio_id,
+        connection_id: connection_id,
+        exchange_name: exchange_name,
         coin: coin.to_h
       }.merge(coin_data.to_h)
       coinstats_account.currency = coinstats_account.inferred_currency
@@ -531,6 +559,37 @@ class CoinstatsItem::Importer
 
     def exchange_display_name
       coinstats_item.institution_name.presence || coinstats_item.exchange_connection_id.to_s.titleize
+    end
+
+    def exchange_portfolio_configurations(linked_accounts = [])
+      configurations = []
+
+      if coinstats_item.exchange_configured?
+        configurations << {
+          portfolio_id: coinstats_item.exchange_portfolio_id,
+          connection_id: coinstats_item.exchange_connection_id,
+          exchange_name: exchange_display_name
+        }
+      end
+
+      Array(linked_accounts).select(&:exchange_source?).each do |account|
+        raw = account.raw_payload.to_h.with_indifferent_access
+        portfolio_id = raw[:portfolio_id].presence || account.wallet_address.presence
+        next if portfolio_id.blank?
+
+        configurations << {
+          portfolio_id: portfolio_id,
+          connection_id: raw[:connection_id].presence || coinstats_item.exchange_connection_id,
+          exchange_name: raw[:exchange_name].presence || exchange_display_name
+        }
+      end
+
+      configurations.uniq { |config| config[:portfolio_id] }
+    end
+
+    def exchange_portfolio_id_for(coinstats_account)
+      raw = coinstats_account.raw_payload.to_h.with_indifferent_access
+      raw[:portfolio_id].presence || coinstats_account.wallet_address.presence || coinstats_item.exchange_portfolio_id
     end
 
     def family_currency

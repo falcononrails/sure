@@ -111,12 +111,13 @@ class CoinstatsItem::ExchangeLinker
       account_name = build_account_name(coin, exchange)
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
         account_id: coin_id.to_s,
-        wallet_address: nil
+        wallet_address: portfolio_id
       )
 
       coinstats_account.name = account_name
       coinstats_account.provider = exchange[:name]
       coinstats_account.account_status = "active"
+      coinstats_account.wallet_address = portfolio_id
       coinstats_account.institution_metadata = {
         logo: coin[:icon],
         exchange_logo: exchange[:icon]
