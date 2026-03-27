@@ -1,6 +1,6 @@
 class AccountsController < ApplicationController
   include StreamExtensions
-  SPARKLINE_CACHE_VERSION = "v2"
+  SPARKLINE_CACHE_VERSION = "v3"
 
   before_action :set_account, only: %i[show sparkline sync set_default remove_default]
   before_action :set_manageable_account, only: %i[toggle_active destroy unlink confirm_unlink select_provider]

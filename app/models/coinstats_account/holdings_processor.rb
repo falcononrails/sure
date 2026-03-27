@@ -54,6 +54,7 @@ class CoinstatsAccount::HoldingsProcessor
       return if account_provider.blank?
 
       active_coins = coinstats_account.portfolio_non_fiat_coins.reject { |coin| coinstats_account.asset_quantity(coin).zero? }
+      target_currency = coinstats_account.inferred_currency
       cleanup_stale_holdings!(active_coins.map { |coin| portfolio_external_id(coin) })
 
       active_coins.each do |coin|
@@ -66,11 +67,11 @@ class CoinstatsAccount::HoldingsProcessor
         import_adapter.import_holding(
           security: security,
           quantity: quantity,
-          amount: coinstats_account.current_value_for_coin(coin),
-          currency: coinstats_account.inferred_currency,
+          amount: coinstats_account.current_value_for_coin(coin, currency: target_currency),
+          currency: target_currency,
           date: holding_date,
-          price: coinstats_account.asset_price(coin, currency: coinstats_account.inferred_currency),
-          cost_basis: coinstats_account.average_buy_price(coin, currency: coinstats_account.inferred_currency),
+          price: coinstats_account.asset_price(coin, currency: target_currency),
+          cost_basis: coinstats_account.average_buy_price(coin, currency: target_currency),
           external_id: portfolio_external_id(coin),
           account_provider_id: account_provider.id,
           source: "coinstats",

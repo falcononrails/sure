@@ -8,12 +8,11 @@ class Balance::LinkedInvestmentSeriesNormalizer
 
   def normalize
     return series unless account.linked? && account.balance_type == :investment
-    return series if account.trades.exists?
 
-    first_stable_provider_holding_date = stable_provider_holding_start_date
-    return series unless first_stable_provider_holding_date.present?
+    first_supported_history_date = supported_history_start_date
+    return series unless first_supported_history_date.present?
 
-    trimmed_values = series.values.select { |value| value.date >= first_stable_provider_holding_date }
+    trimmed_values = series.values.select { |value| value.date >= first_supported_history_date }
     return series if trimmed_values.blank? || trimmed_values.length == series.values.length
 
     Series.new(
@@ -26,6 +25,17 @@ class Balance::LinkedInvestmentSeriesNormalizer
   end
 
   private
+
+    def supported_history_start_date
+      [ first_provider_activity_date, stable_provider_holding_start_date ].compact.min
+    end
+
+    def first_provider_activity_date
+      @first_provider_activity_date ||= account.entries
+        .where.not(source: nil)
+        .where.not(entryable_type: "Valuation")
+        .minimum(:date)
+    end
 
     def provider_holdings_scope
       @provider_holdings_scope ||= account.holdings.where.not(account_provider_id: nil)

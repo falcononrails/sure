@@ -1,5 +1,5 @@
 class AccountableSparklinesController < ApplicationController
-  CACHE_VERSION = "v2"
+  CACHE_VERSION = "v3"
 
   def show
     @accountable = Accountable.from_type(params[:accountable_type]&.classify)
@@ -46,7 +46,7 @@ class AccountableSparklinesController < ApplicationController
     end
 
     def requires_normalized_aggregation?
-      accounts.any? { |account| account.linked? && account.balance_type == :investment && !account.trades.exists? }
+      accounts.any? { |account| account.linked? && account.balance_type == :investment }
     end
 
     def aggregate_normalized_series
