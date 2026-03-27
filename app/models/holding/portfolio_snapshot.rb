@@ -21,7 +21,7 @@ class Holding::PortfolioSnapshot
         .uniq
         .each_with_object({}) { |security_id, hash| hash[security_id] = 0 }
 
-      latest_holdings_scope.find_each do |holding|
+      latest_holdings_scope.each do |holding|
         portfolio[holding.security_id] = holding.qty
       end
 
