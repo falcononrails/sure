@@ -102,23 +102,21 @@ class CoinstatsItem::ExchangeLinker
       raise ArgumentError, "CoinStats portfolio coin is missing an identifier" if coin_id.blank?
 
       account_name = build_account_name(coin, exchange)
-      current_balance = calculate_current_balance(coin_data)
-
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
         account_id: coin_id.to_s,
         wallet_address: nil
       )
 
       coinstats_account.name = account_name
-      coinstats_account.currency = "USD"
-      coinstats_account.current_balance = current_balance
       coinstats_account.provider = exchange[:name]
       coinstats_account.account_status = "active"
       coinstats_account.institution_metadata = {
         logo: coin[:icon],
         exchange_logo: exchange[:icon]
       }.compact
-      coinstats_account.raw_payload = build_snapshot(coin_data, coin, exchange, portfolio_id, current_balance)
+      coinstats_account.raw_payload = build_snapshot(coin_data, coin, exchange, portfolio_id)
+      coinstats_account.currency = coinstats_account.inferred_currency
+      coinstats_account.current_balance = coinstats_account.inferred_current_balance
       coinstats_account.save!
       coinstats_account
     end
@@ -130,7 +128,7 @@ class CoinstatsItem::ExchangeLinker
         family: coinstats_item.family,
         name: coinstats_account.name,
         balance: coinstats_account.current_balance || 0,
-        cash_balance: coinstats_account.current_balance || 0,
+        cash_balance: coinstats_account.inferred_cash_balance,
         currency: coinstats_account.currency || "USD",
         accountable_type: "Crypto",
         accountable_attributes: {
@@ -150,18 +148,7 @@ class CoinstatsItem::ExchangeLinker
       "#{coin_name} (#{exchange[:name]})"
     end
 
-    def calculate_current_balance(coin_data)
-      coin_data = coin_data.with_indifferent_access
-      amount = coin_data[:count].to_d
-      price_usd = coin_data.dig(:price, :USD).to_d
-      total_worth = coin_data.dig(:coinData, :currentValue).to_d
-
-      return total_worth if total_worth.nonzero?
-
-      amount * price_usd
-    end
-
-    def build_snapshot(coin_data, coin, exchange, portfolio_id, current_balance)
+    def build_snapshot(coin_data, coin, exchange, portfolio_id)
       coin_data.to_h.merge(
         source: "exchange",
         portfolio_id: portfolio_id,
@@ -169,8 +156,6 @@ class CoinstatsItem::ExchangeLinker
         exchange_name: exchange[:name],
         id: coin[:identifier].presence || coin[:symbol],
         name: build_account_name(coin, exchange),
-        balance: current_balance,
-        currency: "USD",
         institution_logo: coin[:icon]
       )
     end

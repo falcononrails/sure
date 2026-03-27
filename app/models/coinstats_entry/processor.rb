@@ -14,6 +14,8 @@
 class CoinstatsEntry::Processor
   include CoinstatsTransactionIdentifiable
 
+  EXCHANGE_TRADE_TYPES = %w[buy sell swap trade convert fill].freeze
+
   # @param coinstats_transaction [Hash] Raw transaction data from API
   # @param coinstats_account [CoinstatsAccount] Parent account for context
   def initialize(coinstats_transaction, coinstats_account:)
@@ -31,17 +33,35 @@ class CoinstatsEntry::Processor
       return nil
     end
 
-    import_adapter.import_transaction(
-      external_id: external_id,
-      amount: amount,
-      currency: currency,
-      date: date,
-      name: name,
-      source: "coinstats",
-      merchant: merchant,
-      notes: notes,
-      extra: extra_metadata
-    )
+    if exchange_trade? && trade_security.present?
+      remove_legacy_transaction_entry!
+
+      import_adapter.import_trade(
+        external_id: external_id,
+        security: trade_security,
+        quantity: trade_quantity,
+        price: trade_price,
+        amount: trade_amount,
+        currency: currency,
+        date: date,
+        name: name,
+        source: "coinstats",
+        activity_label: trade_activity_label
+      )
+    else
+      import_adapter.import_transaction(
+        external_id: external_id,
+        amount: amount,
+        currency: currency,
+        date: date,
+        name: name,
+        source: "coinstats",
+        merchant: merchant,
+        notes: notes,
+        extra: extra_metadata,
+        investment_activity_label: transaction_activity_label
+      )
+    end
   rescue ArgumentError => e
     Rails.logger.error "CoinstatsEntry::Processor - Validation error for transaction #{external_id rescue 'unknown'}: #{e.message}"
     raise
@@ -153,6 +173,11 @@ class CoinstatsEntry::Processor
     end
 
     def amount
+      if coinstats_account.exchange_source? && coinstats_account.fiat_asset?
+        absolute_amount = coin_data[:count].to_d.abs
+        return outgoing_transaction_type? ? absolute_amount : -absolute_amount
+      end
+
       # Use currentValue from coinData (USD value) or profitLoss
       usd_value = coin_data[:currentValue] || profit_loss[:currentValue] || 0
 
@@ -189,8 +214,7 @@ class CoinstatsEntry::Processor
     end
 
     def currency
-      # CoinStats values are always in USD
-      "USD"
+      account.currency || coinstats_account.currency || "USD"
     end
 
     def date
@@ -266,5 +290,73 @@ class CoinstatsEntry::Processor
       end
 
       parts.presence&.join(" | ")
+    end
+
+    def exchange_trade?
+      return false unless coinstats_account.exchange_source?
+      return false if coinstats_account.fiat_asset?
+      return false if trade_quantity.zero? || trade_price.zero?
+
+      EXCHANGE_TRADE_TYPES.include?(normalized_transaction_type)
+    end
+
+    def trade_security
+      symbol = coinstats_account.asset_symbol
+      return if symbol.blank?
+
+      Security::Resolver.new(symbol.start_with?("CRYPTO:") ? symbol : "CRYPTO:#{symbol}").resolve
+    end
+
+    def trade_quantity
+      coin_data[:count].to_d
+    end
+
+    def trade_price
+      @trade_price ||= begin
+        quantity = trade_quantity.abs
+        return 0.to_d if quantity.zero?
+
+        value = coin_data[:currentValue] || coin_data[:totalWorth] || profit_loss[:currentValue] || 0
+        BigDecimal(value.to_s).abs / quantity
+      rescue ArgumentError
+        0.to_d
+      end
+    end
+
+    def trade_amount
+      trade_quantity * trade_price
+    end
+
+    def trade_activity_label
+      normalized_transaction_type == "sell" || trade_quantity.negative? ? "Sell" : "Buy"
+    end
+
+    def transaction_activity_label
+      case normalized_transaction_type
+      when "buy" then "Buy"
+      when "sell" then "Sell"
+      when "swap", "trade", "convert" then "Other"
+      when "received", "receive", "deposit", "transfer_in", "roll_in" then "Transfer"
+      when "sent", "send", "withdraw", "transfer_out", "roll_out" then "Transfer"
+      when "reward", "interest" then "Interest"
+      when "dividend" then "Dividend"
+      when "fee" then "Fee"
+      else
+        "Other"
+      end
+    end
+
+    def normalized_transaction_type
+      @normalized_transaction_type ||= transaction_type.to_s.downcase.parameterize(separator: "_")
+    end
+
+    def remove_legacy_transaction_entry!
+      legacy_entry = account.entries.find_by(
+        external_id: external_id,
+        source: "coinstats",
+        entryable_type: "Transaction"
+      )
+
+      legacy_entry&.destroy!
     end
 end

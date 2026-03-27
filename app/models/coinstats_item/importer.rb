@@ -333,23 +333,21 @@ class CoinstatsItem::Importer
       # Find the matching token for this account to extract id, logo, and balance
       matching_token = find_matching_token(balance_data, coinstats_account)
 
-      # Calculate balance from the matching token only, not all tokens
-      # Each coinstats_account represents a single token/coin in the wallet
-      token_balance = calculate_token_balance(matching_token)
+      source_snapshot = (matching_token || {}).to_h.with_indifferent_access
 
       {
         # Use existing account_id if set, otherwise extract from matching token
         id: coinstats_account.account_id.presence || matching_token&.dig(:coinId) || matching_token&.dig(:id),
         name: coinstats_account.name,
-        balance: token_balance,
-        currency: "USD", # CoinStats returns values in USD
+        balance: coinstats_account.inferred_current_balance(source_snapshot),
+        currency: coinstats_account.inferred_currency(source_snapshot),
         address: existing_raw["address"] || existing_raw[:address],
         blockchain: existing_raw["blockchain"] || existing_raw[:blockchain],
         # Extract logo from the matching token
         institution_logo: matching_token&.dig(:imgUrl),
         # Preserve original data
         raw_balance_data: balance_data
-      }
+      }.merge(source_snapshot.slice(:amount, :count, :price, :priceUsd, :symbol, :coinId, :id, :isFiat, :name, :imgUrl))
     end
 
     # Finds the token in balance_data that matches this account.
@@ -398,17 +396,6 @@ class CoinstatsItem::Importer
       end
     end
 
-    # Calculates USD balance from token amount and price.
-    # @param token [Hash, nil] Token with :amount/:balance and :price/:priceUsd
-    # @return [Float] Balance in USD (0 if token is nil)
-    def calculate_token_balance(token)
-      return 0 if token.blank?
-
-      amount = token[:amount] || token[:balance] || 0
-      price = token[:price] || token[:priceUsd] || 0
-      (amount.to_f * price.to_f)
-    end
-
     def find_matching_portfolio_coin(balance_data, coinstats_account)
       Array(balance_data).map(&:with_indifferent_access).find do |coin_data|
         coin = coin_data[:coin].to_h.with_indifferent_access
@@ -425,8 +412,8 @@ class CoinstatsItem::Importer
       {
         id: coin[:identifier].presence || coinstats_account.account_id,
         name: coinstats_account.name,
-        balance: calculate_portfolio_coin_balance(portfolio_coin),
-        currency: "USD",
+        balance: coinstats_account.inferred_current_balance(portfolio_coin),
+        currency: coinstats_account.inferred_currency(portfolio_coin),
         provider: exchange_display_name,
         account_status: "active",
         portfolio_id: existing_raw[:portfolio_id] || coinstats_item.exchange_portfolio_id,
@@ -434,12 +421,7 @@ class CoinstatsItem::Importer
         institution_logo: coin[:icon],
         raw_balance_data: portfolio_coin
       }.merge(existing_raw.slice(:source, :exchange_name))
-    end
-
-    def calculate_portfolio_coin_balance(portfolio_coin)
-      count = portfolio_coin[:count].to_d
-      price_usd = portfolio_coin.dig(:price, :USD).to_d
-      count * price_usd
+       .merge(portfolio_coin.slice(:coin, :count, :price, :averageBuy, :coinId, :isFiat))
     end
 
     def zero_balance_portfolio_coin?(coin_data)
@@ -453,15 +435,11 @@ class CoinstatsItem::Importer
       raise ArgumentError, "CoinStats portfolio coin is missing an identifier" if coin_id.blank?
 
       account_name = "#{coin[:name].presence || coin[:symbol].presence || coin_id.to_s.titleize} (#{exchange_display_name})"
-      current_balance = calculate_portfolio_coin_balance(coin_data)
-
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
         account_id: coin_id.to_s,
         wallet_address: nil
       )
       coinstats_account.name = account_name
-      coinstats_account.currency = "USD"
-      coinstats_account.current_balance = current_balance
       coinstats_account.provider = exchange_display_name
       coinstats_account.account_status = "active"
       coinstats_account.institution_metadata = {
@@ -474,6 +452,8 @@ class CoinstatsItem::Importer
         exchange_name: exchange_display_name,
         coin: coin.to_h
       }.merge(coin_data.to_h)
+      coinstats_account.currency = coinstats_account.inferred_currency
+      coinstats_account.current_balance = coinstats_account.inferred_current_balance
       coinstats_account.save!
       coinstats_account
     end
@@ -485,7 +465,7 @@ class CoinstatsItem::Importer
         family: coinstats_item.family,
         name: coinstats_account.name,
         balance: coinstats_account.current_balance || 0,
-        cash_balance: coinstats_account.current_balance || 0,
+        cash_balance: coinstats_account.inferred_cash_balance,
         currency: coinstats_account.currency || "USD",
         accountable_type: "Crypto",
         accountable_attributes: {

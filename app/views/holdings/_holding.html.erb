@@ -1,5 +1,12 @@
 <%# locals: (holding:) %>
 
+<%
+  converted_amount =
+    if holding.amount_money && holding.currency != holding.account.currency
+      holding.amount_money.exchange_to(holding.account.currency, fallback_rate: 1)
+    end
+%>
+
 <%= turbo_frame_tag dom_id(holding) do %>
   <div class="grid grid-cols-12 items-center text-primary text-sm font-medium p-4">
     <div class="col-span-4 flex items-center gap-4">
@@ -37,11 +44,14 @@
 
     <div class="col-span-2 text-right">
       <% if holding.amount_money %>
-        <%= tag.p format_money(holding.amount_money), class: "privacy-sensitive" %>
+        <%= tag.p format_money(converted_amount || holding.amount_money), class: "privacy-sensitive" %>
       <% else %>
         <%= tag.p "--", class: "text-secondary" %>
       <% end %>
-      <%= tag.p t(".shares", qty: format_quantity(holding.qty)), class: "font-normal text-secondary" %>
+      <% secondary_parts = [] %>
+      <% secondary_parts << format_money(holding.amount_money) if converted_amount %>
+      <% secondary_parts << t(".shares", qty: format_quantity(holding.qty)) %>
+      <%= tag.p secondary_parts.join(" · "), class: "font-normal text-secondary privacy-sensitive" %>
     </div>
 
     <div class="col-span-2 text-right">

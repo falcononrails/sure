@@ -38,7 +38,14 @@ class Holding < ApplicationRecord
     return nil unless amount
     return 0 if amount.zero?
 
-    account.balance.zero? ? 1 : amount / account.balance * 100
+    comparable_amount =
+      if currency == account.currency
+        amount
+      else
+        amount_money.exchange_to(account.currency, fallback_rate: 1).amount
+      end
+
+    account.balance.zero? ? 1 : comparable_amount / account.balance * 100
   end
 
   # Returns average cost per share, or nil if unknown.
