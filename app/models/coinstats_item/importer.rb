@@ -481,7 +481,7 @@ class CoinstatsItem::Importer
     def ensure_exchange_local_account!(coinstats_account)
       return if coinstats_account.account.present?
 
-      account = Account.create_and_sync(
+      attributes = {
         family: coinstats_item.family,
         name: coinstats_account.name,
         balance: coinstats_account.current_balance || 0,
@@ -491,9 +491,10 @@ class CoinstatsItem::Importer
         accountable_attributes: {
           subtype: "exchange",
           tax_treatment: "taxable"
-        },
-        skip_initial_sync: true
-      )
+        }
+      }
+
+      account = Account.create_and_sync(attributes, skip_initial_sync: true)
 
       AccountProvider.create!(account: account, provider: coinstats_account)
     end
