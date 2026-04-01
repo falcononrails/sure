@@ -1,6 +1,4 @@
 class AccountableSparklinesController < ApplicationController
-  CACHE_VERSION = "v3"
-
   def show
     @accountable = Accountable.from_type(params[:accountable_type]&.classify)
 
@@ -50,27 +48,16 @@ class AccountableSparklinesController < ApplicationController
     end
 
     def aggregate_normalized_series
-      series_list = accounts.filter_map do |account|
-        series = Balance::ChartSeriesBuilder.new(
-          account_ids: [ account.id ],
-          currency: family.currency,
-          period: Period.last_30_days,
-          favorable_direction: account.favorable_direction,
-          interval: "1 day"
-        ).balance_series
-
-        Balance::LinkedInvestmentSeriesNormalizer.new(account: account, series: series).normalize
-      end
-
-      Balance::SeriesAggregator.new(
-        series_list: series_list,
+      Balance::LinkedInvestmentSeriesNormalizer.aggregate_accounts(
+        accounts: accounts,
         currency: family.currency,
+        period: Period.last_30_days,
         favorable_direction: @accountable.favorable_direction,
-        align_to_common_start: true
-      ).aggregate
+        interval: "1 day"
+      )
     end
 
     def cache_key
-      family.build_cache_key("#{@accountable.name}_sparkline_#{CACHE_VERSION}", invalidate_on_data_updates: true)
+      family.build_cache_key("#{@accountable.name}_sparkline_#{Account::Chartable::SPARKLINE_CACHE_VERSION}", invalidate_on_data_updates: true)
     end
 end

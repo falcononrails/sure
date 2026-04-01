@@ -34,20 +34,24 @@ class CoinstatsEntry::Processor
     end
 
     if exchange_trade? && trade_security.present?
-      remove_legacy_transaction_entry!
+      return legacy_transaction_entry if skip_legacy_transaction_migration?
 
-      import_adapter.import_trade(
-        external_id: external_id,
-        security: trade_security,
-        quantity: trade_quantity,
-        price: trade_price,
-        amount: trade_amount,
-        currency: currency,
-        date: date,
-        name: name,
-        source: "coinstats",
-        activity_label: trade_activity_label
-      )
+      Account.transaction do
+        remove_legacy_transaction_entry!
+
+        import_adapter.import_trade(
+          external_id: external_id,
+          security: trade_security,
+          quantity: trade_quantity,
+          price: trade_price,
+          amount: trade_amount,
+          currency: currency,
+          date: date,
+          name: name,
+          source: "coinstats",
+          activity_label: trade_activity_label
+        )
+      end
     else
       import_adapter.import_transaction(
         external_id: external_id,
@@ -115,7 +119,10 @@ class CoinstatsEntry::Processor
       if fee_data.present?
         cs["fee_amount"] = fee_data[:count] if fee_data[:count].present?
         cs["fee_symbol"] = fee_data.dig(:coin, :symbol) if fee_data.dig(:coin, :symbol).present?
-        cs["fee_value"] = fee_data[:totalWorth] if fee_data[:totalWorth].present?
+        if fee_data[:totalWorth].present?
+          cs["fee_value"] = fee_data[:totalWorth]
+          cs["fee_usd"] = fee_data[:totalWorth]
+        end
       end
 
       return nil if cs.empty?
@@ -132,7 +139,7 @@ class CoinstatsEntry::Processor
 
     def data
       @data ||= coinstats_transaction.with_indifferent_access
-    end
+      end
 
     # Helper accessors for nested data structures
     def hash_data
@@ -184,10 +191,11 @@ class CoinstatsEntry::Processor
     def amount
       if portfolio_exchange_account?
         absolute_amount = matched_item_total_worth.abs.nonzero? ||
-          coin_data[:currentValue].to_d.abs ||
-          profit_loss[:currentValue].to_d.abs
+          coin_data[:currentValue]&.to_d&.abs&.nonzero? ||
+          profit_loss[:currentValue]&.to_d&.abs&.nonzero? ||
+          0.to_d
 
-        return outgoing_transaction_type? ? absolute_amount : -absolute_amount
+        return portfolio_outflow? ? absolute_amount : -absolute_amount
       end
 
       if coinstats_account.exchange_source? && coinstats_account.fiat_asset?
@@ -303,7 +311,7 @@ class CoinstatsEntry::Processor
       if profit_loss[:profit].present?
         profit_formatted = profit_loss[:profit].to_f.round(2)
         percent_formatted = profit_loss[:profitPercent].to_f.round(2)
-        parts << "P/L: #{profit_formatted} #{currency} (#{percent_formatted}%)"
+        parts << "P/L: #{formatted_currency_amount(profit_formatted)} (#{percent_formatted}%)"
       end
 
       # Include explorer URL for reference
@@ -373,13 +381,25 @@ class CoinstatsEntry::Processor
     end
 
     def remove_legacy_transaction_entry!
-      legacy_entry = account.entries.find_by(
+      legacy_transaction_entry&.destroy!
+    end
+
+    def legacy_transaction_entry
+      @legacy_transaction_entry ||= account.entries.find_by(
         external_id: external_id,
         source: "coinstats",
         entryable_type: "Transaction"
       )
+    end
 
-      legacy_entry&.destroy!
+    def skip_legacy_transaction_migration?
+      return false unless legacy_transaction_entry.present?
+
+      skip_reason = import_adapter.send(:determine_skip_reason, legacy_transaction_entry)
+      return false if skip_reason.blank?
+
+      import_adapter.send(:record_skip, legacy_transaction_entry, skip_reason)
+      true
     end
 
     def matched_symbol
@@ -429,7 +449,9 @@ class CoinstatsEntry::Processor
 
     def portfolio_trade_item
       crypto_items = transaction_items.reject { |item| portfolio_fiat_item?(item) || item[:count].to_d.zero? }
-      crypto_items.find { |item| item[:count].to_d.positive? } || crypto_items.first
+      crypto_items.find { |item| item[:count].to_d.negative? } ||
+        crypto_items.find { |item| item[:count].to_d.positive? } ||
+        crypto_items.first
     end
 
     def primary_portfolio_item
@@ -451,5 +473,18 @@ class CoinstatsEntry::Processor
             Array(entry.with_indifferent_access[:items]).map(&:with_indifferent_access)
           end
       end
+    end
+
+    def portfolio_outflow?
+      outgoing_transaction_type? ||
+        trade_item_count.negative? ||
+        matched_item_count.negative? ||
+        coin_data[:count].to_d.negative?
+    end
+
+    def formatted_currency_amount(amount)
+      return "$#{amount}" if currency == "USD"
+
+      "#{amount} #{currency}"
     end
 end

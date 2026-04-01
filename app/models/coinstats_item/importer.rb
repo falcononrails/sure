@@ -85,13 +85,15 @@ class CoinstatsItem::Importer
 
       exchange_portfolio_configurations.each do |config|
         portfolio_coins = coinstats_provider.list_portfolio_coins(portfolio_id: config[:portfolio_id])
-        coinstats_account = upsert_exchange_account(
-          portfolio_coins,
+        coinstats_account = exchange_portfolio_account_manager.upsert_account!(
+          coins_data: portfolio_coins,
           portfolio_id: config[:portfolio_id],
           connection_id: config[:connection_id],
-          exchange_name: config[:exchange_name]
+          exchange_name: config[:exchange_name],
+          account_name: config[:exchange_name],
+          institution_logo: coinstats_item.raw_institution_payload.to_h.with_indifferent_access[:icon]
         )
-        ensure_exchange_local_account!(coinstats_account)
+        exchange_portfolio_account_manager.ensure_local_account!(coinstats_account)
       end
     rescue => e
       Rails.logger.warn "CoinstatsItem::Importer - Exchange account discovery failed: #{e.message}"
@@ -235,9 +237,13 @@ class CoinstatsItem::Importer
       balance_data = portfolio_coins_data[portfolio_id]
 
       if coinstats_account.exchange_portfolio_account?
-        coinstats_account.upsert_coinstats_snapshot!(
-          normalize_exchange_portfolio_data(balance_data, coinstats_account, portfolio_id: portfolio_id)
-        )
+        if !balance_data.nil?
+          coinstats_account.upsert_coinstats_snapshot!(
+            normalize_exchange_portfolio_data(balance_data, coinstats_account, portfolio_id: portfolio_id)
+          )
+        else
+          Rails.logger.warn "CoinstatsItem::Importer - Missing exchange portfolio coin data for account #{coinstats_account.id} (portfolio #{portfolio_id}); preserving previous snapshot"
+        end
       else
         matching_coin = find_matching_portfolio_coin(balance_data, coinstats_account)
 
@@ -408,7 +414,7 @@ class CoinstatsItem::Importer
         institution_logo: matching_token&.dig(:imgUrl),
         # Preserve original data
         raw_balance_data: balance_data
-      }.merge(source_snapshot.slice(:amount, :count, :price, :priceUsd, :symbol, :coinId, :id, :isFiat, :name, :imgUrl))
+      }.merge(source_snapshot.slice(:amount, :count, :price, :priceUsd, :symbol, :coinId, :isFiat, :imgUrl))
     end
 
     # Finds the token in balance_data that matches this account.
@@ -514,7 +520,7 @@ class CoinstatsItem::Importer
       )
 
       {
-        id: coinstats_account.account_id.presence || portfolio_account_id(portfolio_id),
+        id: coinstats_account.account_id.presence || exchange_portfolio_account_manager.portfolio_account_id(portfolio_id),
         name: coinstats_account.name,
         balance: coinstats_account.inferred_current_balance(snapshot),
         currency: coinstats_account.inferred_currency(snapshot),
@@ -528,56 +534,12 @@ class CoinstatsItem::Importer
       }.merge(snapshot.slice(:source, :exchange_name))
     end
 
-    def upsert_exchange_account(coins_data, portfolio_id:, connection_id:, exchange_name:)
-      account_name = exchange_name
-      coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
-        account_id: portfolio_account_id(portfolio_id),
-        wallet_address: portfolio_id
-      )
-      coinstats_account.name = account_name
-      coinstats_account.provider = exchange_name
-      coinstats_account.account_status = "active"
-      coinstats_account.wallet_address = portfolio_id
-      coinstats_account.institution_metadata = {
-        logo: coinstats_item.raw_institution_payload.to_h.with_indifferent_access[:icon]
-      }.compact
-      coinstats_account.raw_payload = {
-        source: "exchange",
-        portfolio_account: true,
-        portfolio_id: portfolio_id,
-        connection_id: connection_id,
-        exchange_name: exchange_name,
-        coins: Array(coins_data).map(&:to_h)
-      }
-      coinstats_account.currency = coinstats_account.inferred_currency
-      coinstats_account.current_balance = coinstats_account.inferred_current_balance
-      coinstats_account.save!
-      coinstats_account
-    end
-
-    def ensure_exchange_local_account!(coinstats_account)
-      return if coinstats_account.account.present?
-
-      attributes = {
-        family: coinstats_item.family,
-        name: coinstats_account.name,
-        balance: coinstats_account.current_balance || 0,
-        cash_balance: coinstats_account.inferred_cash_balance,
-        currency: coinstats_account.currency || family_currency,
-        accountable_type: "Crypto",
-        accountable_attributes: {
-          subtype: "exchange",
-          tax_treatment: "taxable"
-        }
-      }
-
-      account = Account.create_and_sync(attributes, skip_initial_sync: true)
-
-      AccountProvider.create!(account: account, provider: coinstats_account)
-    end
-
     def exchange_display_name
       coinstats_item.institution_name.presence || coinstats_item.exchange_connection_id.to_s.titleize
+    end
+
+    def exchange_portfolio_account_manager
+      @exchange_portfolio_account_manager ||= CoinstatsItem::ExchangePortfolioAccountManager.new(coinstats_item)
     end
 
     def exchange_portfolio_configurations(linked_accounts = [])
@@ -609,10 +571,6 @@ class CoinstatsItem::Importer
     def exchange_portfolio_id_for(coinstats_account)
       raw = coinstats_account.raw_payload.to_h.with_indifferent_access
       raw[:portfolio_id].presence || coinstats_account.wallet_address.presence || coinstats_item.exchange_portfolio_id
-    end
-
-    def portfolio_account_id(portfolio_id)
-      "exchange_portfolio:#{portfolio_id}"
     end
 
     def family_currency
